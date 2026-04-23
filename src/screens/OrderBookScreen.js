@@ -47,7 +47,7 @@ const OrderBookScreen = ({ navigation }) => {
   const loadData = async () => {
     try {
       const token = await SecureStore.getItemAsync('token');
-      if (!token) { navigation.replace('Login'); return; }
+      if (!token) { return; }
 
       // Fetch accounts
       const accountsRes = await fetch(`${API_URL}/accounts`, {

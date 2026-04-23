@@ -62,7 +62,6 @@ const WalletScreen = ({ navigation }) => {
         try {
           const userData = await SecureStore.getItemAsync('user');
           if (!userData) {
-            navigation.replace('Login');
             return;
           }
           const parsed = JSON.parse(userData);
@@ -96,7 +95,6 @@ const WalletScreen = ({ navigation }) => {
       const token = await SecureStore.getItemAsync('token');
       if (!token) {
         setRefreshing(false);
-        navigation.replace('Login');
         return;
       }
 
@@ -107,11 +105,8 @@ const WalletScreen = ({ navigation }) => {
         fetch(`${API_URL}/wallet/transactions`, { headers }),
       ]);
 
-      // Token expired or invalid — redirect to login
       if (walletRes.status === 401 || walletRes.status === 403) {
-        await SecureStore.deleteItemAsync('token');
-        await SecureStore.deleteItemAsync('user');
-        navigation.replace('Login');
+        console.log('[Wallet] Token rejected, will retry on next refresh');
         return;
       }
 

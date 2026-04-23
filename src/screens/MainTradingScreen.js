@@ -190,47 +190,19 @@ const TradingProvider = ({ children, navigation, route }) => {
   const [loadingNews, setLoadingNews] = useState(true);
   const [currentMainTab, setCurrentMainTab] = useState('Home'); // Track current tab for notifications
 
-  // Check token expiry — if expired, redirect to login immediately
-  const checkTokenExpiry = useCallback(async () => {
-    try {
-      const userData = await SecureStore.getItemAsync('user');
-      const token = await SecureStore.getItemAsync('token');
-      if (!userData || !token) {
-        navigation.replace('Login');
-        return false;
-      }
-      const parsed = JSON.parse(userData);
-      if (parsed.expires_at && Date.now() >= new Date(parsed.expires_at).getTime()) {
-        console.log('[TrustEdge] Token expired, redirecting to login');
-        await SecureStore.deleteItemAsync('token');
-        await SecureStore.deleteItemAsync('user');
-        navigation.replace('Login');
-        return false;
-      }
-      return true;
-    } catch { return true; }
-  }, [navigation]);
-
   useEffect(() => {
     loadUser();
     fetchInstrumentsFromAPI();
 
-    // Check token on app foreground
+    // Refresh data when app comes back to foreground
     const sub = AppState.addEventListener('change', async (state) => {
-      if (state === 'active') {
-        const valid = await checkTokenExpiry();
-        if (valid && user) {
-          fetchAccounts(user.id || user._id);
-        }
+      if (state === 'active' && user) {
+        fetchAccounts(user.id || user._id);
       }
     });
 
-    // Periodic token check every 2 minutes
-    const interval = setInterval(checkTokenExpiry, 120000);
-
     return () => {
       sub?.remove();
-      clearInterval(interval);
     };
   }, []);
 
@@ -615,8 +587,7 @@ const TradingProvider = ({ children, navigation, route }) => {
         console.log('DEBUG: Parsed user ID:', parsedUser?.id || parsedUser?._id);
         setUser(parsedUser);
       } else {
-        console.log('DEBUG: No user data, redirecting to Login');
-        navigation.replace('Login');
+        console.log('DEBUG: No user data found in storage');
       }
     } catch (e) {
       console.error('Error loading user:', e);
@@ -630,11 +601,10 @@ const TradingProvider = ({ children, navigation, route }) => {
       const token = await SecureStore.getItemAsync('token');
       
       if (!token) {
-        console.log('[TrustEdge] No token found, redirecting to login');
-        navigation.replace('Login');
+        console.log('[TrustEdge] No token found');
         return;
       }
-      
+
       const res = await fetch(`${API_URL}/accounts`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -642,12 +612,8 @@ const TradingProvider = ({ children, navigation, route }) => {
         }
       });
 
-      // Token expired or invalid — redirect to login
       if (res.status === 401 || res.status === 403) {
-        console.log('[TrustEdge] Token rejected (401/403), redirecting to login');
-        await SecureStore.deleteItemAsync('token');
-        await SecureStore.deleteItemAsync('user');
-        navigation.replace('Login');
+        console.log('[TrustEdge] Token rejected (401/403), will retry on next refresh');
         return;
       }
 
@@ -4295,34 +4261,34 @@ const TradeTab = () => {
 
       {/* SL/TP Modal */}
       <Modal visible={showSlTpModal} animationType="slide" transparent onRequestClose={() => setShowSlTpModal(false)}>
-        <KeyboardAvoidingView 
+        <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.slTpModalOverlay}
         >
-          <TouchableOpacity 
-            style={styles.slTpModalBackdrop} 
-            activeOpacity={1} 
+          <TouchableOpacity
+            style={styles.slTpModalBackdrop}
+            activeOpacity={1}
             onPress={() => { Keyboard.dismiss(); setShowSlTpModal(false); }}
           />
-          <View style={styles.slTpModalContent}>
-            <View style={styles.slTpModalHandle} />
+          <View style={[styles.slTpModalContent, { backgroundColor: colors.bgCard }]}>
+            <View style={[styles.slTpModalHandle, { backgroundColor: colors.border }]} />
             <View style={styles.slTpModalHeader}>
-              <Text style={styles.slTpModalTitle}>
+              <Text style={[styles.slTpModalTitle, { color: colors.textPrimary }]}>
                 {selectedTrade?.symbol} - Set SL/TP
               </Text>
               <TouchableOpacity onPress={() => { setShowSlTpModal(false); Keyboard.dismiss(); }}>
-                <Ionicons name="close" size={24} color="#fff" />
+                <Ionicons name="close" size={24} color={colors.textPrimary} />
               </TouchableOpacity>
             </View>
-            
+
             <View style={styles.slTpInputGroup}>
-              <Text style={styles.slTpLabel}>Stop Loss</Text>
+              <Text style={[styles.slTpLabel, { color: colors.textMuted }]}>Stop Loss</Text>
               <TextInput
-                style={styles.slTpInput}
+                style={[styles.slTpInput, { backgroundColor: isDark ? '#2a2a2a' : '#f5f5f5', borderColor: colors.border, color: colors.textPrimary }]}
                 value={stopLoss}
                 onChangeText={(text) => setStopLoss(text.replace(/[^0-9.]/g, ''))}
                 placeholder="Enter stop loss price"
-                placeholderTextColor="#666"
+                placeholderTextColor={colors.textMuted}
                 keyboardType="numbers-and-punctuation"
                 returnKeyType="next"
                 autoCorrect={false}
@@ -4331,15 +4297,15 @@ const TradeTab = () => {
                 editable={true}
               />
             </View>
-            
+
             <View style={styles.slTpInputGroup}>
-              <Text style={styles.slTpLabel}>Take Profit</Text>
+              <Text style={[styles.slTpLabel, { color: colors.textMuted }]}>Take Profit</Text>
               <TextInput
-                style={styles.slTpInput}
+                style={[styles.slTpInput, { backgroundColor: isDark ? '#2a2a2a' : '#f5f5f5', borderColor: colors.border, color: colors.textPrimary }]}
                 value={takeProfit}
                 onChangeText={(text) => setTakeProfit(text.replace(/[^0-9.]/g, ''))}
                 placeholder="Enter take profit price"
-                placeholderTextColor="#666"
+                placeholderTextColor={colors.textMuted}
                 keyboardType="numbers-and-punctuation"
                 returnKeyType="done"
                 autoCorrect={false}
@@ -4351,20 +4317,20 @@ const TradeTab = () => {
             </View>
 
             <View style={styles.slTpCurrentInfo}>
-              <Text style={styles.slTpCurrentText}>
+              <Text style={[styles.slTpCurrentText, { color: colors.textMuted }]}>
                 Open: {selectedTrade?.openPrice?.toFixed(5) || '-'}
               </Text>
-              <Text style={styles.slTpCurrentText}>
+              <Text style={[styles.slTpCurrentText, { color: colors.textMuted }]}>
                 {selectedTrade?.side || '-'} | {selectedTrade?.quantity || 0} lots
               </Text>
             </View>
-            
+
             <View style={styles.slTpButtonRow}>
-              <TouchableOpacity 
-                style={styles.slTpClearBtn} 
+              <TouchableOpacity
+                style={[styles.slTpClearBtn, { backgroundColor: isDark ? '#2a2a2a' : '#f0f0f0' }]}
                 onPress={() => { setStopLoss(''); setTakeProfit(''); }}
               >
-                <Text style={styles.slTpClearBtnText}>Clear</Text>
+                <Text style={[styles.slTpClearBtnText, { color: colors.textPrimary }]}>Clear</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.slTpSaveBtn} onPress={updateSlTp}>
                 <Text style={styles.slTpSaveBtnText}>Save Changes</Text>
@@ -5180,32 +5146,9 @@ const ChartTab = ({ route }) => {
 
   const [showNewsTab, setShowNewsTab] = useState(false);
 
-  const newsHtml = `
-    <!DOCTYPE html>
-    <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <style>
-      *{margin:0;padding:0;box-sizing:border-box;}
-      html,body{height:100%;width:100%;background:${chartBg};overflow-y:auto;-webkit-overflow-scrolling:touch;}
-      .tradingview-widget-container{height:100%;width:100%;}
-    </style></head>
-    <body>
-    <div class="tradingview-widget-container">
-      <div class="tradingview-widget-container__widget"></div>
-    </div>
-    <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-timeline.js" async>
-    {
-      "feedMode": "symbol",
-      "symbol": "${getSymbolForTradingView(activeSymbol)}",
-      "isTransparent": true,
-      "displayMode": "regular",
-      "width": "100%",
-      "height": "100%",
-      "colorTheme": "${chartTheme}",
-      "locale": "en"
-    }
-    </script>
-    </body></html>
-  `;
+  const tvSymbol = getSymbolForTradingView(activeSymbol);
+  const encodedSymbol = encodeURIComponent(tvSymbol);
+  const newsUrl = `https://www.tradingview.com/embed-widget/timeline/?locale=en&feedMode=symbol&symbol=${encodedSymbol}&colorTheme=${chartTheme}&isTransparent=true&displayMode=regular&width=100%25&height=100%25`;
 
   return (
     <View style={[styles.chartContainer, { backgroundColor: colors.bgPrimary }]}>
@@ -5334,10 +5277,20 @@ const ChartTab = ({ route }) => {
           </View>
           <WebView
             key={`news-${activeSymbol}-${isDark}`}
-            source={{ html: newsHtml }}
+            source={{ uri: newsUrl }}
             style={{ flex: 1, backgroundColor: chartBg }}
             javaScriptEnabled={true}
+            domStorageEnabled={true}
             scrollEnabled={true}
+            originWhitelist={['*']}
+            mixedContentMode="always"
+            startInLoadingState={true}
+            renderLoading={() => (
+              <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center', backgroundColor: chartBg }}>
+                <ActivityIndicator size="large" color={colors.primary} />
+                <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 10 }}>Loading news...</Text>
+              </View>
+            )}
           />
         </View>
       ) : (

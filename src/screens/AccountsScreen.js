@@ -197,8 +197,6 @@ const AccountsScreen = ({ navigation, route }) => {
       const userData = await SecureStore.getItemAsync('user');
       if (userData) {
         setUser(JSON.parse(userData));
-      } else {
-        navigation.replace('Login');
       }
     } catch (e) {
       console.error('Error loading user:', e);

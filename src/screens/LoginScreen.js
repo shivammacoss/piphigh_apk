@@ -39,37 +39,11 @@ const LoginScreen = ({ navigation }) => {
 
   const checkExistingAuth = async () => {
     try {
-      const userData = await SecureStore.getItemAsync('user');
       const token = await SecureStore.getItemAsync('token');
-      if (userData && token) {
-        // Check token expiry
-        const user = JSON.parse(userData);
-        if (user.expires_at) {
-          const expiresAt = new Date(user.expires_at).getTime();
-          if (Date.now() >= expiresAt) {
-            // Token expired — clear and stay on login
-            await SecureStore.deleteItemAsync('token');
-            await SecureStore.deleteItemAsync('user');
-            setCheckingAuth(false);
-            return;
-          }
-        }
-        // Verify token is still valid with server
-        try {
-          const res = await fetch(`${API_URL}/profile`, {
-            headers: { 'Authorization': `Bearer ${token}` },
-          });
-          if (res.ok) {
-            navigation.replace('MainTrading');
-          } else {
-            // Server rejected token — clear stale auth
-            await SecureStore.deleteItemAsync('token');
-            await SecureStore.deleteItemAsync('user');
-          }
-        } catch {
-          // Network error — allow offline access with non-expired token
-          navigation.replace('MainTrading');
-        }
+      if (token) {
+        // Token exists — go straight to app (stay logged in forever)
+        navigation.replace('MainTrading');
+        return;
       }
     } catch (e) {
       console.error('Error checking auth:', e);
