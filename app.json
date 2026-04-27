@@ -22,7 +22,7 @@
     "updates": {
       "enabled": true,
       "fallbackToCacheTimeout": 3000,
-      "url": "https://u.expo.dev/985ec4ac-3e2f-44d1-9584-70b5d7dc4e5e"
+      "url": "https://u.expo.dev/37189d1e-c9b2-4d37-aaf1-185c00758d77"
     },
     "ios": {
       "supportsTablet": true,
@@ -65,13 +65,14 @@
     },
     "extra": {
       "eas": {
-        "projectId": "985ec4ac-3e2f-44d1-9584-70b5d7dc4e5e"
+        "projectId": "37189d1e-c9b2-4d37-aaf1-185c00758d77"
       }
     },
     "plugins": [
       "expo-font",
       "expo-updates",
       "expo-secure-store"
-    ]
+    ],
+    "owner": "shivam92388"
   }
 }

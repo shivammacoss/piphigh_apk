@@ -29,7 +29,7 @@ import { Ionicons, MaterialCommunityIcons, Feather } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import * as SecureStore from 'expo-secure-store';
 import * as Updates from 'expo-updates';
-import { API_URL, API_BASE_URL } from '../config';
+import { API_URL, API_BASE_URL, WS_URL } from '../config';
 import { useTheme } from '../context/ThemeContext';
 import socketService from '../services/socketService';
 import { getJsonAuthHeaders } from '../utils/authHeaders';
@@ -43,6 +43,700 @@ import Mt5QuoteRow from '../components/Mt5QuoteRow';
 
 const Tab = createBottomTabNavigator();
 const { width, height } = Dimensions.get('window');
+
+// ─── Chart data-source helpers (kept available for future use) ───────────
+const CHART_CRYPTO_SET = new Set([
+  'BTCUSD','ETHUSD','LTCUSD','XRPUSD','BNBUSD','SOLUSD','ADAUSD',
+  'DOGEUSD','DOTUSD','MATICUSD','AVAXUSD','LINKUSD','TRXUSD','SHIBUSD',
+]);
+
+const YAHOO_INDEX_MAP = {
+  US30: '^DJI', DJI: '^DJI', DJ30: '^DJI',
+  US500: '^GSPC', SPX500: '^GSPC', SP500: '^GSPC',
+  NAS100: '^NDX', US100: '^NDX', NDX: '^NDX',
+  UK100: '^FTSE', FTSE100: '^FTSE',
+  GER40: '^GDAXI', DE30: '^GDAXI', DE40: '^GDAXI',
+  JPN225: '^N225', JP225: '^N225',
+  HK50: '^HSI',
+  AUS200: '^AXJO',
+};
+
+// eslint-disable-next-line no-unused-vars
+function getChartDataSource(symbol) {
+  const sym = String(symbol || '').toUpperCase();
+  if (CHART_CRYPTO_SET.has(sym)) {
+    const base = sym.replace(/USD$/, '');
+    return { provider: 'binance', remote: `${base}USDT` };
+  }
+  if (YAHOO_INDEX_MAP[sym]) {
+    return { provider: 'yahoo', remote: YAHOO_INDEX_MAP[sym] };
+  }
+  // Forex / metals / generic — Yahoo uses the `=X` suffix for FX & spot metals.
+  if (/^[A-Z]{6}$/.test(sym)) {
+    return { provider: 'yahoo', remote: `${sym}=X` };
+  }
+  // Stocks (e.g. AAPL, TSLA) — pass through as-is.
+  return { provider: 'yahoo', remote: sym };
+}
+
+// Bootstrap script for the in-WebView chart (TradingView Charting Library).
+// Hosts the chart that web uses, with custom datafeed, broker_factory, and
+// the same entry/SL/TP horizontal_line overlay logic as
+// piphigh/frontend/trader/src/components/charts/ChartPositionOverlay.tsx.
+//
+// Loaded with baseUrl = https://piphigh.com/, so /charting_library/ resolves
+// to the production server where the library is already hosted.
+const CHART_BOOTSTRAP_JS = String.raw`
+(function () {
+  function postMsg(payload) {
+    try {
+      if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+        window.ReactNativeWebView.postMessage(JSON.stringify(payload));
+      }
+    } catch (e) {}
+  }
+
+  var cfg = window.PIPHIGH_CONFIG || {};
+  var SYMBOL    = String(cfg.symbol    || 'EURUSD').toUpperCase();
+  var INTERVAL  = String(cfg.interval  || '5');
+  var THEME     = (cfg.isDark ? 'Dark' : 'Light');
+  var BG        = cfg.isDark ? '#0d0d0d' : '#ffffff';
+  var TXT       = cfg.isDark ? '#aaaaaa' : '#555555';
+  var DECIMALS  = Number(cfg.decimals  || 5);
+  var TOKEN     = String(cfg.token || '');
+  var API_BASE  = String(cfg.apiUrl  || 'https://api.piphigh.com/api/v1').replace(/\/+$/, '');
+  var WS_URL    = String(cfg.wsUrl   || 'wss://api.piphigh.com');
+  var INSTRUMENTS = Array.isArray(cfg.instruments) ? cfg.instruments : [];
+  var ACCOUNT   = cfg.account || null;
+
+  var statusEl = document.getElementById('status');
+  function setStatus(text) {
+    if (!statusEl) return;
+    statusEl.textContent = text || '';
+    statusEl.style.display = text ? 'flex' : 'none';
+  }
+
+  if (!window.TradingView || !window.TradingView.widget) {
+    setStatus('Charting library failed to load. Check your connection.');
+    postMsg({ type: 'error', message: 'TradingView library missing' });
+    return;
+  }
+
+  function authHeaders(extra) {
+    var h = { 'Accept': 'application/json' };
+    if (TOKEN) h['Authorization'] = 'Bearer ' + TOKEN;
+    if (extra) for (var k in extra) h[k] = extra[k];
+    return h;
+  }
+
+  // ── Symbol catalogue helpers (mirrors web's lookup against the trading store)
+  function findInstrument(sym) {
+    var u = String(sym || '').toUpperCase();
+    for (var i = 0; i < INSTRUMENTS.length; i++) {
+      if (String(INSTRUMENTS[i].symbol || '').toUpperCase() === u) return INSTRUMENTS[i];
+    }
+    return null;
+  }
+  function segmentToType(seg) {
+    var s = String(seg || '').toLowerCase();
+    if (s === 'crypto')      return 'crypto';
+    if (s === 'index' || s === 'indices') return 'index';
+    if (s === 'commodity' || s === 'commodities' || s === 'metal' || s === 'metals') return 'commodity';
+    if (s === 'stock' || s === 'stocks' || s === 'equity') return 'stock';
+    return 'forex';
+  }
+  var BINANCE_MAP = {
+    BTCUSD:'BTCUSDT', ETHUSD:'ETHUSDT', LTCUSD:'LTCUSDT', XRPUSD:'XRPUSDT',
+    SOLUSD:'SOLUSDT', BNBUSD:'BNBUSDT', DOGEUSD:'DOGEUSDT', ADAUSD:'ADAUSDT',
+    TRXUSD:'TRXUSDT', LINKUSD:'LINKUSDT', DOTUSD:'DOTUSDT', AVAXUSD:'AVAXUSDT',
+  };
+  function isBinanceSym(s) { return !!BINANCE_MAP[String(s || '').toUpperCase()]; }
+  function toBinance(s) { return BINANCE_MAP[String(s || '').toUpperCase()]; }
+
+  function resolutionToBinance(res) {
+    var map = {'1':'1m','5':'5m','15':'15m','30':'30m','60':'1h','240':'4h','D':'1d','1D':'1d'};
+    return map[String(res)] || '5m';
+  }
+  function resolutionToSec(res) {
+    var map = {'1':60,'5':300,'15':900,'30':1800,'60':3600,'240':14400,'D':86400,'1D':86400};
+    return map[String(res)] || 300;
+  }
+
+  // ── DATAFEED ─────────────────────────────────────────────────────────
+  var SUPPORTED_RESOLUTIONS = ['1','5','15','30','60','240','1D'];
+  var liveSubs = {};   // listenerGuid -> { sym, res, onTick, lastBar }
+
+  var datafeed = {
+    onReady: function (cb) {
+      setTimeout(function () {
+        cb({
+          supported_resolutions: SUPPORTED_RESOLUTIONS,
+          exchanges: [
+            { value: '', name: 'All', desc: 'All exchanges' },
+            { value: 'PipHigh', name: 'PipHigh', desc: 'PipHigh' },
+          ],
+          symbols_types: [
+            { name: 'All', value: '' },
+            { name: 'Forex', value: 'forex' },
+            { name: 'Crypto', value: 'crypto' },
+            { name: 'Index', value: 'index' },
+            { name: 'Commodity', value: 'commodity' },
+            { name: 'Stock', value: 'stock' },
+          ],
+          supports_marks: false,
+          supports_timescale_marks: false,
+          supports_search: true,
+          supports_group_request: false,
+        });
+      }, 0);
+    },
+
+    searchSymbols: function (userInput, exchange, symbolType, onResult) {
+      var q = String(userInput || '').toUpperCase();
+      var out = [];
+      for (var i = 0; i < INSTRUMENTS.length && out.length < 30; i++) {
+        var inst = INSTRUMENTS[i];
+        var sym = String(inst.symbol || '').toUpperCase();
+        var typ = segmentToType(inst.segment || inst.category);
+        if (symbolType && typ !== symbolType) continue;
+        if (q && sym.indexOf(q) === -1) continue;
+        out.push({
+          symbol: sym, full_name: 'PipHigh:' + sym, ticker: sym,
+          description: inst.display_name || inst.name || sym,
+          exchange: 'PipHigh', type: typ,
+        });
+      }
+      onResult(out);
+    },
+
+    resolveSymbol: function (symbolName, onResolve, onError) {
+      var sym = String(symbolName || '').toUpperCase().replace(/^PIPHIGH:/, '');
+      var inst = findInstrument(sym);
+      var digits = inst && (inst.digits || inst.precision);
+      if (!digits) digits = (sym.indexOf('JPY') >= 0) ? 3 : (isBinanceSym(sym) ? 2 : DECIMALS);
+      var pricescale = Math.pow(10, digits);
+      var typ = segmentToType(inst && (inst.segment || inst.category));
+      setTimeout(function () {
+        onResolve({
+          ticker: sym, name: sym,
+          description: (inst && (inst.display_name || inst.name)) || sym,
+          type: typ,
+          session: '24x7', timezone: 'Etc/UTC',
+          exchange: 'PipHigh', listed_exchange: 'PipHigh',
+          format: 'price',
+          pricescale: pricescale, minmov: 1,
+          has_intraday: true, has_daily: true, has_weekly_and_monthly: false,
+          supported_resolutions: SUPPORTED_RESOLUTIONS,
+          volume_precision: 2,
+          data_status: 'streaming',
+        });
+      }, 0);
+    },
+
+    getBars: function (symbolInfo, resolution, periodParams, onResult, onError) {
+      var sym = symbolInfo.ticker || symbolInfo.name;
+      var from = periodParams.from, to = periodParams.to;
+
+      function done(bars) {
+        if (!bars || !bars.length) onResult([], { noData: true });
+        else onResult(bars, { noData: false });
+      }
+
+      // Crypto -> Binance (real OHLC)
+      if (isBinanceSym(sym)) {
+        var iv = resolutionToBinance(resolution);
+        var url = 'https://api.binance.com/api/v3/klines?symbol=' + encodeURIComponent(toBinance(sym))
+                + '&interval=' + iv + '&startTime=' + (from*1000) + '&endTime=' + (to*1000) + '&limit=1000';
+        fetch(url).then(function (r) { return r.json(); }).then(function (rows) {
+          if (!Array.isArray(rows)) throw new Error('binance bad response');
+          var bars = rows.map(function (k) {
+            return { time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] };
+          });
+          done(bars);
+        }).catch(function (e) {
+          fetchBackend(sym, resolution, from, to, done, onError);
+        });
+        return;
+      }
+
+      // Backend (forex/metals/indices/stocks)
+      fetchBackend(sym, resolution, from, to, done, onError);
+    },
+
+    subscribeBars: function (symbolInfo, resolution, onTick, listenerGuid) {
+      liveSubs[listenerGuid] = {
+        sym: (symbolInfo.ticker || symbolInfo.name).toUpperCase(),
+        res: String(resolution),
+        onTick: onTick,
+        lastBar: null,
+      };
+    },
+
+    unsubscribeBars: function (listenerGuid) {
+      delete liveSubs[listenerGuid];
+    },
+  };
+
+  function fetchBackend(sym, resolution, from, to, done, onError) {
+    var url = API_BASE + '/instruments/' + encodeURIComponent(sym) + '/bars'
+            + '?resolution=' + encodeURIComponent(resolution)
+            + '&from=' + from + '&to=' + to;
+    fetch(url, { headers: authHeaders() }).then(function (r) {
+      if (!r.ok) throw new Error('bars HTTP ' + r.status);
+      return r.json();
+    }).then(function (data) {
+      var raw = (data && Array.isArray(data.bars)) ? data.bars : (Array.isArray(data) ? data : []);
+      var bars = raw.map(function (b) {
+        var t = Number(b.time || b.t || 0);
+        if (t < 1e12) t *= 1000;  // backend may return seconds
+        return { time: t, open: +b.open, high: +b.high, low: +b.low, close: +b.close, volume: +(b.volume || 0) };
+      }).filter(function (b) { return isFinite(b.open) && b.time > 0; });
+      done(bars);
+    }).catch(function (e) {
+      // Last-ditch: signal no-data so the chart doesn't error out.
+      done([]);
+    });
+  }
+
+  // ── PRICE FEED (WebSocket) ──────────────────────────────────────────
+  var lastPrice = {};   // symbol -> { bid, ask, ts }
+  function applyTickToSubs(sym, mid, vol) {
+    var nowMs = Date.now();
+    var keys = Object.keys(liveSubs);
+    for (var i = 0; i < keys.length; i++) {
+      var s = liveSubs[keys[i]];
+      if (s.sym !== sym) continue;
+      var barSec = resolutionToSec(s.res);
+      var bucket = Math.floor(nowMs / 1000 / barSec) * barSec * 1000;
+      if (!s.lastBar || bucket > s.lastBar.time) {
+        s.lastBar = { time: bucket, open: mid, high: mid, low: mid, close: mid, volume: vol || 0 };
+      } else {
+        s.lastBar.high  = Math.max(s.lastBar.high, mid);
+        s.lastBar.low   = Math.min(s.lastBar.low,  mid);
+        s.lastBar.close = mid;
+        s.lastBar.volume = (s.lastBar.volume || 0) + (vol || 0);
+      }
+      try { s.onTick(s.lastBar); } catch (e) {}
+    }
+  }
+
+  var ws = null, wsRetry = 0;
+  function connectWS() {
+    try {
+      ws = new WebSocket(WS_URL.replace(/\/+$/, '') + '/ws/prices');
+    } catch (e) { return; }
+    ws.onopen = function () { wsRetry = 0; postMsg({ type: 'wsopen' }); };
+    ws.onmessage = function (ev) {
+      try {
+        var msg = JSON.parse(ev.data);
+        // Server format may vary; common shapes: {symbol, bid, ask} or {s, b, a} or {prices:[...]}
+        var list = Array.isArray(msg) ? msg : (msg.prices || (msg.symbol ? [msg] : []));
+        for (var i = 0; i < list.length; i++) {
+          var p = list[i];
+          var sym = String(p.symbol || p.s || '').toUpperCase();
+          if (!sym) continue;
+          var bid = +p.bid || +p.b || 0;
+          var ask = +p.ask || +p.a || 0;
+          var mid = (bid && ask) ? (bid + ask) / 2 : (bid || ask);
+          if (!isFinite(mid) || mid <= 0) continue;
+          lastPrice[sym] = { bid: bid, ask: ask, ts: Date.now() };
+          applyTickToSubs(sym, mid, +p.volume || 0);
+        }
+      } catch (e) {}
+    };
+    ws.onclose = function () {
+      wsRetry++;
+      var delay = Math.min(15000, 1000 * Math.pow(1.5, wsRetry));
+      setTimeout(connectWS, delay);
+    };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+  }
+  if (WS_URL) connectWS();
+
+  // Allow the RN side to push ticks too (fallback if WS is gated by network).
+  window.PIPHIGH_API = window.PIPHIGH_API || {};
+  window.PIPHIGH_API.setLiveTick = function (symbol, bid, ask) {
+    var sym = String(symbol || '').toUpperCase();
+    var b = +bid, a = +ask;
+    var mid = (b && a) ? (b + a) / 2 : (b || a);
+    if (!sym || !isFinite(mid) || mid <= 0) return;
+    lastPrice[sym] = { bid: b, ask: a, ts: Date.now() };
+    applyTickToSubs(sym, mid, 0);
+  };
+
+  // ── BROKER (positions / orders + native SL/TP via positionUpdate) ───
+  var _host = null;
+  var _positions = [];   // pushed from RN
+  var _orders    = [];
+
+  window.PIPHIGH_API.setPositions = function (list, orders) {
+    _positions = Array.isArray(list) ? list : [];
+    _orders    = Array.isArray(orders) ? orders : _orders;
+    pushPositionUpdates();
+    syncOverlay();
+  };
+
+  function brokerFactory(host) {
+    _host = host;
+    setInterval(pushPositionUpdates, 3000);
+
+    return {
+      connectionStatus: function () { return 1; /* Connected */ },
+      isTradable: function () { return Promise.resolve(true); },
+      chartContextMenuActions: function () { return Promise.resolve([]); },
+      accountManagerInfo: function () {
+        return {
+          accountTitle: 'Trading Account',
+          summary: [
+            { text: 'Balance', wValue: host.factory.createWatchedValue(0), formatter: 'fixed', isDefault: true },
+            { text: 'Equity',  wValue: host.factory.createWatchedValue(0), formatter: 'fixed', isDefault: true },
+          ],
+          orderColumns: [], positionColumns: [], pages: [],
+          contextMenuActions: function () { return Promise.resolve([]); },
+        };
+      },
+      accountsMetainfo: function () {
+        var acc = ACCOUNT || { id: 'default', currency: 'USD', name: 'Account' };
+        return [{ id: String(acc.id || 'default'), name: String(acc.name || acc.account_number || 'Account') + ' (' + (acc.currency || 'USD') + ')', currency: acc.currency || 'USD' }];
+      },
+      currentAccount: function () { return String((ACCOUNT && (ACCOUNT.id || ACCOUNT._id)) || 'default'); },
+      setCurrentAccount: function () {},
+      orders: function () {
+        return Promise.resolve(_orders.map(function (o) {
+          return {
+            id: String(o.id || o._id),
+            symbol: String(o.symbol || '').toUpperCase(),
+            type: o.orderType === 'limit' ? 1 : (o.orderType === 'stop' ? 2 : 3),
+            side: (o.side || '').toLowerCase() === 'sell' ? -1 : 1,
+            qty: Number(o.lots || o.quantity || 0),
+            limitPrice: Number(o.price || 0),
+            stopPrice: Number(o.stop_price || o.stopPrice || 0),
+            stopLoss: Number(o.stop_loss || o.stopLoss || 0) || undefined,
+            takeProfit: Number(o.take_profit || o.takeProfit || 0) || undefined,
+            status: 6, // Working
+          };
+        }));
+      },
+      positions: function () { return Promise.resolve(positionsForHost()); },
+      executions: function () { return Promise.resolve([]); },
+      placeOrder: function (order) {
+        var body = {
+          account_id: (ACCOUNT && (ACCOUNT.id || ACCOUNT._id)) || null,
+          symbol: order.symbol,
+          side: (order.side === -1 || String(order.side).toLowerCase() === 'sell') ? 'sell' : 'buy',
+          order_type: order.type === 1 ? 'limit' : (order.type === 2 ? 'stop' : 'market'),
+          lots: Number(order.qty || 0.01),
+        };
+        if (order.limitPrice) body.price = Number(order.limitPrice);
+        if (order.stopPrice)  body.stop_price = Number(order.stopPrice);
+        if (order.stopLoss)   body.stop_loss = Number(order.stopLoss);
+        if (order.takeProfit) body.take_profit = Number(order.takeProfit);
+        return fetch(API_BASE + '/orders/', {
+          method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body),
+        }).then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) {
+          if (!r.ok) throw new Error(d.detail || d.message || 'order failed');
+          postMsg({ type: 'orderPlaced', data: d });
+          return { orderId: String(d.id || d.order_id || '') };
+        }); });
+      },
+      modifyOrder: function (order) {
+        var body = {};
+        if (order.limitPrice) body.price = Number(order.limitPrice);
+        if (order.stopPrice)  body.stop_price = Number(order.stopPrice);
+        if (order.qty != null) body.lots = Number(order.qty);
+        return fetch(API_BASE + '/orders/' + encodeURIComponent(order.id), {
+          method: 'PUT', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body),
+        }).then(function (r) { return r.ok ? Promise.resolve() : r.json().then(function (d) { throw new Error(d.detail || d.message || 'modify failed'); }); });
+      },
+      cancelOrder: function (id) {
+        return fetch(API_BASE + '/orders/' + encodeURIComponent(id), {
+          method: 'DELETE', headers: authHeaders(),
+        }).then(function () { postMsg({ type: 'orderCancelled', id: id }); });
+      },
+      editPositionBrackets: function (positionId, modifiedBrackets) {
+        var body = {};
+        if (modifiedBrackets.stopLoss   != null) body.stop_loss   = Number(modifiedBrackets.stopLoss);
+        if (modifiedBrackets.takeProfit != null) body.take_profit = Number(modifiedBrackets.takeProfit);
+        return fetch(API_BASE + '/positions/' + encodeURIComponent(positionId), {
+          method: 'PUT', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body),
+        }).then(function (r) {
+          if (!r.ok) return r.json().then(function (d) { throw new Error(d.detail || d.message || 'bracket failed'); });
+          postMsg({ type: 'bracketUpdated', positionId: positionId, brackets: body });
+        });
+      },
+      closePosition: function (positionId) {
+        return fetch(API_BASE + '/positions/' + encodeURIComponent(positionId) + '/close', {
+          method: 'POST', headers: authHeaders(),
+        }).then(function () { postMsg({ type: 'positionClosed', positionId: positionId }); });
+      },
+      brokerConfig: function () {
+        return Promise.resolve({
+          configFlags: {
+            supportOrderBrackets: true, supportPositionBrackets: true, supportEditBrackets: true,
+            supportPLUpdate: true, supportClosePosition: true, supportReversePosition: false,
+            supportNativeReversePosition: false, supportMarketOrders: true,
+            supportLimitOrders: true, supportStopOrders: true, supportStopLimitOrders: false,
+            supportModifyOrder: true, supportCancelOrder: true, supportEditAmount: true,
+            showQuantityInsteadOfAmount: true, supportLevel2Data: false,
+          },
+          durations: [],
+        });
+      },
+      quantityFormatter: function () {
+        return { format: function (q) { return Number(q).toFixed(2); }, parse: function (s) { return parseFloat(s) || 0.01; } };
+      },
+    };
+  }
+
+  function positionsForHost() {
+    return _positions.map(function (p) {
+      var sym = String(p.symbol || '').toUpperCase();
+      var lp = lastPrice[sym] || {};
+      var side = String(p.side || '').toLowerCase();
+      var last = side === 'buy' ? (lp.bid || p.openPrice) : (lp.ask || p.openPrice);
+      var qty  = Number(p.lots || p.quantity || 0);
+      var avg  = Number(p.openPrice || p.open_price || 0);
+      var pl   = (side === 'buy' ? (last - avg) : (avg - last)) * qty;
+      return {
+        id: String(p.id || p._id),
+        symbol: sym,
+        side: side === 'sell' ? -1 : 1,
+        qty: qty,
+        avgPrice: avg,
+        last: last,
+        unrealizedPl: pl,
+        stopLoss: p.stopLoss != null ? Number(p.stopLoss) : undefined,
+        takeProfit: p.takeProfit != null ? Number(p.takeProfit) : undefined,
+      };
+    });
+  }
+  function pushPositionUpdates() {
+    if (!_host) return;
+    var arr = positionsForHost();
+    for (var i = 0; i < arr.length; i++) {
+      try { _host.positionUpdate(arr[i]); } catch (e) {}
+    }
+  }
+
+  // ── POSITION OVERLAY (entry/SL/TP horizontal_line, mirrors web) ──────
+  var COLORS = { buy: '#2962FF', sell: '#FF6D00', sl: '#EF5350', tp: '#26A69A' };
+  var LS = { solid: 0, dashed: 2 };
+  var SHAPE_BASE = { lock: true, disableSelection: true, disableSave: true, disableUndo: true, zOrder: 'top' };
+  var shapesById = {};   // posId -> { entryId, slId, tpId, lastEntry, lastSL, lastTP, lastLots, lastSide }
+  var creating = {};
+  var widgetRef = null, chartReady = false;
+
+  function getActiveChart() {
+    if (!widgetRef || !chartReady) return null;
+    try { return widgetRef.activeChart(); } catch (e) { return null; }
+  }
+  function nowSec() { return Math.floor(Date.now() / 1000); }
+
+  function syncOverlay() {
+    var chart = getActiveChart();
+    if (!chart || typeof chart.createShape !== 'function') return;
+    var symU = SYMBOL.toUpperCase();
+    var matching = _positions.filter(function (p) { return String(p.symbol || '').toUpperCase() === symU; });
+    var ids = {};
+    matching.forEach(function (p) { ids[p.id] = true; });
+
+    Object.keys(shapesById).forEach(function (pid) {
+      if (!ids[pid]) {
+        var s = shapesById[pid];
+        if (s.entryId) try { chart.removeEntity(s.entryId); } catch (e) {}
+        if (s.slId)    try { chart.removeEntity(s.slId);    } catch (e) {}
+        if (s.tpId)    try { chart.removeEntity(s.tpId);    } catch (e) {}
+        delete shapesById[pid];
+      }
+    });
+
+    matching.forEach(function (p) {
+      var existing = shapesById[p.id];
+      if (!existing) {
+        if (creating[p.id]) return;
+        creating[p.id] = true;
+        createShapeSet(chart, p).then(function (set) {
+          if (set) shapesById[p.id] = set;
+        }).catch(function () {}).then(function () { delete creating[p.id]; });
+      } else {
+        updateShapeSet(chart, existing, p);
+      }
+    });
+  }
+
+  function createShapeSet(chart, p) {
+    var t = nowSec();
+    var entryColor = (String(p.side).toLowerCase() === 'buy') ? COLORS.buy : COLORS.sell;
+    var lots = Number(p.lots || 0).toFixed(2);
+    var entryTitle = String(p.side || '').toUpperCase() + ' ' + lots;
+
+    return chart.createShape({ time: t, price: Number(p.openPrice) }, {
+      shape: 'horizontal_line', text: entryTitle,
+      lock: true, disableSelection: true, disableSave: true, disableUndo: true, zOrder: 'top',
+      overrides: {
+        linecolor: entryColor, linestyle: LS.solid, linewidth: 2,
+        showLabel: true, textcolor: entryColor,
+        horzLabelsAlign: 'right', vertLabelsAlign: 'top',
+        fontsize: 11, bold: true,
+      },
+    }).then(function (entryId) {
+      var slPromise = (p.stopLoss && p.stopLoss > 0) ? chart.createShape(
+        { time: t, price: Number(p.stopLoss) },
+        { shape: 'horizontal_line', text: 'SL', lock: true, disableSelection: true, disableSave: true, disableUndo: true, zOrder: 'top',
+          overrides: { linecolor: COLORS.sl, linestyle: LS.dashed, linewidth: 1, showLabel: true, textcolor: COLORS.sl, horzLabelsAlign: 'right', vertLabelsAlign: 'top', fontsize: 11, bold: true } }
+      ).catch(function () { return null; }) : Promise.resolve(null);
+
+      var tpPromise = (p.takeProfit && p.takeProfit > 0) ? chart.createShape(
+        { time: t, price: Number(p.takeProfit) },
+        { shape: 'horizontal_line', text: 'TP', lock: true, disableSelection: true, disableSave: true, disableUndo: true, zOrder: 'top',
+          overrides: { linecolor: COLORS.tp, linestyle: LS.dashed, linewidth: 1, showLabel: true, textcolor: COLORS.tp, horzLabelsAlign: 'right', vertLabelsAlign: 'top', fontsize: 11, bold: true } }
+      ).catch(function () { return null; }) : Promise.resolve(null);
+
+      return Promise.all([slPromise, tpPromise]).then(function (ids) {
+        return {
+          entryId: entryId, slId: ids[0] || null, tpId: ids[1] || null,
+          lastEntry: Number(p.openPrice), lastSL: p.stopLoss, lastTP: p.takeProfit,
+          lastLots: Number(p.lots || 0), lastSide: p.side,
+        };
+      });
+    });
+  }
+
+  function updateShapeSet(chart, set, p) {
+    var t = nowSec();
+    var entryPrice = Number(p.openPrice);
+    if (entryPrice !== set.lastEntry) {
+      try { var api = chart.getShapeById(set.entryId); api && api.setPoints && api.setPoints([{ time: t, price: entryPrice }]); } catch (e) {}
+      set.lastEntry = entryPrice;
+    }
+
+    var slNow = (p.stopLoss && p.stopLoss > 0) ? Number(p.stopLoss) : null;
+    if (slNow != null && set.slId) {
+      if (slNow !== set.lastSL) {
+        try { var a = chart.getShapeById(set.slId); a && a.setPoints && a.setPoints([{ time: t, price: slNow }]); } catch (e) {}
+        set.lastSL = slNow;
+      }
+    } else if (slNow != null && !set.slId) {
+      chart.createShape({ time: t, price: slNow }, {
+        shape: 'horizontal_line', text: 'SL', lock: true, disableSelection: true, disableSave: true, disableUndo: true, zOrder: 'top',
+        overrides: { linecolor: COLORS.sl, linestyle: LS.dashed, linewidth: 1, showLabel: true, textcolor: COLORS.sl, horzLabelsAlign: 'right', vertLabelsAlign: 'top', fontsize: 11, bold: true },
+      }).then(function (id) { set.slId = id; set.lastSL = slNow; }).catch(function () {});
+    } else if (slNow == null && set.slId) {
+      try { chart.removeEntity(set.slId); } catch (e) {}
+      set.slId = null; set.lastSL = null;
+    }
+
+    var tpNow = (p.takeProfit && p.takeProfit > 0) ? Number(p.takeProfit) : null;
+    if (tpNow != null && set.tpId) {
+      if (tpNow !== set.lastTP) {
+        try { var a2 = chart.getShapeById(set.tpId); a2 && a2.setPoints && a2.setPoints([{ time: t, price: tpNow }]); } catch (e) {}
+        set.lastTP = tpNow;
+      }
+    } else if (tpNow != null && !set.tpId) {
+      chart.createShape({ time: t, price: tpNow }, {
+        shape: 'horizontal_line', text: 'TP', lock: true, disableSelection: true, disableSave: true, disableUndo: true, zOrder: 'top',
+        overrides: { linecolor: COLORS.tp, linestyle: LS.dashed, linewidth: 1, showLabel: true, textcolor: COLORS.tp, horzLabelsAlign: 'right', vertLabelsAlign: 'top', fontsize: 11, bold: true },
+      }).then(function (id) { set.tpId = id; set.lastTP = tpNow; }).catch(function () {});
+    } else if (tpNow == null && set.tpId) {
+      try { chart.removeEntity(set.tpId); } catch (e) {}
+      set.tpId = null; set.lastTP = null;
+    }
+  }
+
+  // ── INITIALISE WIDGET ────────────────────────────────────────────────
+  setStatus('Loading chart…');
+  try {
+    widgetRef = new TradingView.widget({
+      container: 'tv_chart',
+      locale: 'en',
+      library_path: '/charting_library/',
+      datafeed: datafeed,
+      symbol: SYMBOL,
+      interval: INTERVAL,
+      timezone: 'Etc/UTC',
+      theme: THEME,
+      fullscreen: false,
+      autosize: true,
+      debug: false,
+      broker_factory: brokerFactory,
+      disabled_features: [
+        'use_localstorage_for_settings',
+        'header_compare',
+        'header_symbol_search',
+        'display_market_status',
+        'popup_hints',
+      ],
+      enabled_features: [
+        'study_templates',
+        'side_toolbar_in_fullscreen_mode',
+        'trading_notifications',
+        'show_trading_notifications_history',
+        'pinch_scale',
+        'horz_touch_drag_scroll',
+        'vert_touch_drag_scroll',
+      ],
+      overrides: {
+        'mainSeriesProperties.style': 1,
+        'mainSeriesProperties.candleStyle.upColor': '#26a69a',
+        'mainSeriesProperties.candleStyle.downColor': '#ef5350',
+        'mainSeriesProperties.candleStyle.borderUpColor': '#26a69a',
+        'mainSeriesProperties.candleStyle.borderDownColor': '#ef5350',
+        'mainSeriesProperties.candleStyle.wickUpColor': '#26a69a',
+        'mainSeriesProperties.candleStyle.wickDownColor': '#ef5350',
+        'paneProperties.background': BG,
+        'paneProperties.backgroundType': 'solid',
+        'scalesProperties.textColor': TXT,
+        'scalesProperties.backgroundColor': BG,
+      },
+      loading_screen: { backgroundColor: BG, foregroundColor: '#2962FF' },
+    });
+
+    widgetRef.onChartReady(function () {
+      chartReady = true;
+      setStatus('');
+      postMsg({ type: 'ready', symbol: SYMBOL });
+      // Apply any positions that arrived before the chart was ready.
+      try { syncOverlay(); } catch (e) {}
+    });
+  } catch (e) {
+    setStatus('Could not initialise the chart.');
+    postMsg({ type: 'error', message: String(e && e.message || e) });
+  }
+
+  // ── PUBLIC API for the React-Native side ─────────────────────────────
+  window.PIPHIGH_API.setSymbol = function (sym) {
+    SYMBOL = String(sym || '').toUpperCase();
+    if (widgetRef && chartReady) {
+      try { widgetRef.activeChart().setSymbol(SYMBOL); } catch (e) {}
+    }
+    syncOverlay();
+  };
+  window.PIPHIGH_API.setInterval = function (i) {
+    INTERVAL = String(i || '5');
+    if (widgetRef && chartReady) {
+      try { widgetRef.activeChart().setResolution(INTERVAL); } catch (e) {}
+    }
+  };
+  window.PIPHIGH_API.setToken = function (t) { TOKEN = String(t || ''); };
+  window.PIPHIGH_API.setAccount = function (a) { ACCOUNT = a || null; };
+  window.PIPHIGH_API.refresh = function () { try { syncOverlay(); } catch (e) {} };
+
+  // Listen for posted messages too (alt path).
+  function onMessage(event) {
+    var data = event && event.data;
+    if (typeof data !== 'string') return;
+    try {
+      var msg = JSON.parse(data);
+      if (msg && msg.type === 'positions') window.PIPHIGH_API.setPositions(msg.list, msg.orders);
+      else if (msg && msg.type === 'tick') window.PIPHIGH_API.setLiveTick(msg.symbol, msg.bid, msg.ask);
+      else if (msg && msg.type === 'symbol') window.PIPHIGH_API.setSymbol(msg.symbol);
+      else if (msg && msg.type === 'token') window.PIPHIGH_API.setToken(msg.token);
+    } catch (e) {}
+  }
+  document.addEventListener('message', onMessage);
+  window.addEventListener('message', onMessage);
+})();
+`;
 
 // iOS 26 Style Toast Notification Component
 const ToastContext = React.createContext();
@@ -5093,56 +5787,150 @@ const ChartTab = ({ route }) => {
 
   const chartTheme = isDark ? 'dark' : 'light';
   const chartBg = isDark ? '#121212' : '#ffffff';
-  
-  const chartHtml = `
-    <!DOCTYPE html>
-    <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <style>*{margin:0;padding:0;box-sizing:border-box;}html,body{height:100%;width:100%;background:${chartBg};overflow:hidden;}</style></head>
-    <body>
-    <div class="tradingview-widget-container" style="height:100%;width:100%">
-      <div id="tradingview_chart" style="height:100%;width:100%"></div>
-    </div>
-    <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-    <script type="text/javascript">
-    new TradingView.widget({
-      "autosize": true,
-      "symbol": "${getSymbolForTradingView(activeSymbol)}",
-      "interval": "5",
-      "timezone": "Etc/UTC",
-      "theme": "${chartTheme}",
-      "style": "1",
-      "locale": "en",
-      "toolbar_bg": "${chartBg}",
-      "enable_publishing": false,
-      "hide_top_toolbar": false,
-      "hide_legend": false,
-      "hide_side_toolbar": false,
-      "save_image": false,
-      "container_id": "tradingview_chart",
-      "backgroundColor": "${chartBg}",
-      "withdateranges": true,
-      "allow_symbol_change": false,
-      "details": true,
-      "hotlist": false,
-      "calendar": false,
-      "show_popup_button": true,
-      "popup_width": "1000",
-      "popup_height": "650",
-      "studies": [],
-      "studies_overrides": {},
-      "overrides": {
-        "mainSeriesProperties.showPriceLine": true,
-        "mainSeriesProperties.highLowAvgPrice.highLowPriceLinesVisible": true,
-        "scalesProperties.showSeriesLastValue": true,
-        "scalesProperties.showStudyLastValue": true,
-        "paneProperties.legendProperties.showLegend": true,
-        "paneProperties.legendProperties.showSeriesTitle": true,
-        "paneProperties.legendProperties.showSeriesOHLC": true,
-        "paneProperties.legendProperties.showBarChange": true
+
+  // ── Single chart: TradingView Charting Library (loaded from web's host).
+  // Loaded with baseUrl https://piphigh.com/ so /charting_library/* resolves
+  // to the production server where the library is already hosted.
+  const chartWebViewRef = useRef(null);
+  const [chartJwt, setChartJwt] = useState('');
+
+  // Pull JWT once for the chart (TradingView datafeed/broker calls use it).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const t = await SecureStore.getItemAsync('token');
+        if (!cancelled) setChartJwt(t || '');
+      } catch (e) {}
+    })();
+    return () => { cancelled = true; };
+  }, [ctx.user]);
+
+  // Open positions on the active symbol — pushed into the chart so the overlay
+  // can draw entry/SL/TP horizontal lines (mirrors web's ChartPositionOverlay).
+  const positionsForChart = useMemo(() => {
+    const sym = activeSymbol.toUpperCase();
+    const open = Array.isArray(ctx.openTrades) ? ctx.openTrades : [];
+    return open
+      .filter((t) => String(t?.symbol || '').toUpperCase() === sym)
+      .map((t) => ({
+        id: String(t._id || t.id || `${t.symbol}-${t.openPrice}-${t.side}`),
+        symbol: t.symbol,
+        side: String(t.side || '').toLowerCase(),
+        lots: Number(t.lots || t.quantity || 0),
+        openPrice: Number(t.openPrice || t.open_price || 0),
+        stopLoss: t.stopLoss != null ? Number(t.stopLoss) : (t.stop_loss != null ? Number(t.stop_loss) : null),
+        takeProfit: t.takeProfit != null ? Number(t.takeProfit) : (t.take_profit != null ? Number(t.take_profit) : null),
+      }))
+      .filter((p) => Number.isFinite(p.openPrice) && p.openPrice > 0);
+  }, [ctx.openTrades, activeSymbol]);
+
+  // Pending orders for the broker_factory (same source the broker uses on web).
+  const ordersForChart = useMemo(() => {
+    const arr = Array.isArray(ctx.pendingOrders) ? ctx.pendingOrders : [];
+    return arr.map((o) => ({
+      id: String(o._id || o.id),
+      symbol: o.symbol,
+      side: String(o.side || '').toLowerCase(),
+      orderType: o.orderType || o.order_type || 'limit',
+      lots: Number(o.lots || o.quantity || 0),
+      price: Number(o.price || 0),
+      stop_price: Number(o.stop_price || o.stopPrice || 0),
+      stop_loss: o.stopLoss || o.stop_loss || null,
+      take_profit: o.takeProfit || o.take_profit || null,
+    }));
+  }, [ctx.pendingOrders]);
+
+  const accountForChart = useMemo(() => {
+    const acc = ctx.isChallengeMode ? ctx.selectedChallengeAccount : ctx.selectedAccount;
+    if (!acc) return null;
+    return {
+      id: String(acc.id || acc._id || ''),
+      _id: String(acc._id || acc.id || ''),
+      account_number: acc.account_number || '',
+      currency: acc.currency || 'USD',
+      name: acc.account_number ? `${acc.account_number} (${acc.is_demo ? 'Demo' : 'Live'})` : 'Account',
+      is_demo: !!acc.is_demo,
+    };
+  }, [ctx.selectedAccount, ctx.selectedChallengeAccount, ctx.isChallengeMode]);
+
+  const chartHtml = useMemo(() => {
+    const config = {
+      symbol: activeSymbol,
+      isDark,
+      decimals,
+      interval: '5',
+      token: chartJwt,
+      apiUrl: API_URL,
+      wsUrl: WS_URL,
+      account: accountForChart,
+      // Send a slim copy of the instruments list — datafeed.searchSymbols/resolveSymbol use it.
+      instruments: (Array.isArray(ctx.instruments) ? ctx.instruments : []).map((i) => ({
+        symbol: i.symbol,
+        display_name: i.display_name || i.name,
+        segment: i.category || i.segment,
+        digits: i.digits || i.precision,
+      })),
+    };
+    return `<!DOCTYPE html>
+<html><head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{height:100%;width:100%;background:${chartBg};overflow:hidden;font-family:-apple-system,Segoe UI,Roboto,sans-serif;}
+  #tv_chart{position:absolute;inset:0;}
+  #status{position:absolute;inset:0;display:none;align-items:center;justify-content:center;color:${isDark ? '#bbb' : '#444'};font-size:13px;text-align:center;padding:0 24px;background:${chartBg};z-index:5;}
+</style>
+</head><body>
+<div id="tv_chart"></div>
+<div id="status">Loading chart…</div>
+<script>window.PIPHIGH_CONFIG=${JSON.stringify(config)};</script>
+<script src="/charting_library/charting_library.standalone.js"></script>
+<script>${CHART_BOOTSTRAP_JS}</script>
+</body></html>`;
+  }, [activeSymbol, isDark, decimals, chartJwt, accountForChart, ctx.instruments, chartBg]);
+
+  // Push position + order updates into the chart WebView (no remount).
+  useEffect(() => {
+    if (!chartWebViewRef.current) return;
+    const js = `window.PIPHIGH_API && window.PIPHIGH_API.setPositions(${JSON.stringify(positionsForChart)}, ${JSON.stringify(ordersForChart)}); true;`;
+    try { chartWebViewRef.current.injectJavaScript(js); } catch (e) {}
+  }, [positionsForChart, ordersForChart]);
+
+  // Push live ticks (fallback in case the WebView's WS connection is gated).
+  useEffect(() => {
+    if (!chartWebViewRef.current) return;
+    if (!currentPrice.bid && !currentPrice.ask) return;
+    const js = `window.PIPHIGH_API && window.PIPHIGH_API.setLiveTick(${JSON.stringify(activeSymbol)}, ${currentPrice.bid || 0}, ${currentPrice.ask || 0}); true;`;
+    try { chartWebViewRef.current.injectJavaScript(js); } catch (e) {}
+  }, [activeSymbol, currentPrice.bid, currentPrice.ask]);
+
+  // Push token / account changes without remounting.
+  useEffect(() => {
+    if (!chartWebViewRef.current || !chartJwt) return;
+    const js = `window.PIPHIGH_API && window.PIPHIGH_API.setToken(${JSON.stringify(chartJwt)}); true;`;
+    try { chartWebViewRef.current.injectJavaScript(js); } catch (e) {}
+  }, [chartJwt]);
+
+  // When chart signals it's ready, push positions+orders+token immediately.
+  const handleChartMessage = useCallback((event) => {
+    try {
+      const msg = JSON.parse(event?.nativeEvent?.data || '{}');
+      if (msg.type === 'ready' && chartWebViewRef.current) {
+        const js = `
+          window.PIPHIGH_API && window.PIPHIGH_API.setToken(${JSON.stringify(chartJwt)});
+          window.PIPHIGH_API && window.PIPHIGH_API.setPositions(${JSON.stringify(positionsForChart)}, ${JSON.stringify(ordersForChart)});
+          true;`;
+        try { chartWebViewRef.current.injectJavaScript(js); } catch (e) {}
+      } else if (msg.type === 'orderPlaced' || msg.type === 'positionClosed' || msg.type === 'bracketUpdated' || msg.type === 'orderCancelled') {
+        ctx.fetchOpenTrades?.();
+        ctx.fetchPendingOrders?.();
+        ctx.fetchAccountSummary?.();
+      } else if (msg.type === 'error') {
+        console.warn('[Chart]', msg.message);
       }
-    });
-    </script></body></html>
-  `;
+    } catch (e) {}
+  }, [positionsForChart, ordersForChart, chartJwt, ctx]);
 
   const [showNewsTab, setShowNewsTab] = useState(false);
 
@@ -5295,13 +6083,21 @@ const ChartTab = ({ route }) => {
         </View>
       ) : (
         <View style={[styles.chartWrapper, { zIndex: 0 }]}>
+          {/* Single chart: TradingView Charting Library — drawing tools, indicators
+              and SL/TP/entry lines all in one (loaded from piphigh.com). */}
           <WebView
-            key={`${activeSymbol}-${isDark}`}
-            source={{ html: chartHtml }}
+            ref={chartWebViewRef}
+            key={`tvcl-${activeSymbol}-${isDark}-${chartJwt ? 'a' : 'g'}`}
+            source={{ html: chartHtml, baseUrl: 'https://piphigh.com/' }}
             style={{ flex: 1, backgroundColor: chartBg }}
             javaScriptEnabled={true}
+            domStorageEnabled={true}
             scrollEnabled={false}
+            originWhitelist={['*']}
+            mixedContentMode="always"
+            allowsInlineMediaPlayback={true}
             androidLayerType="hardware"
+            onMessage={handleChartMessage}
           />
         </View>
       )}
@@ -6771,6 +7567,7 @@ const styles = StyleSheet.create({
   chartTabTextActive: { color: '#1a73e8' },
   addChartBtn: { paddingHorizontal: 12, paddingVertical: 10 },
   chartWrapper: { flex: 1, backgroundColor: '#1E1E1E', minHeight: 400 },
+  // (unused chart-toolbar styles removed — TradingView Charting Library has its own toolbar)
   sentimentSection: { backgroundColor: '#1E1E1E', paddingHorizontal: 16, paddingVertical: 12 },
   sentimentTitle: { color: '#fff', fontSize: 16, fontWeight: '600', marginBottom: 8 },
   sentimentWidget: { height: 180, backgroundColor: '#1E1E1E', borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: '#333333' },
