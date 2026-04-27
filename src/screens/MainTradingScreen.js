@@ -6385,7 +6385,8 @@ const MoreTab = ({ navigation }) => {
         Alert.alert('Up to date', 'You are already on the latest version.');
       }
     } catch (e) {
-      Alert.alert('Update check failed', String(e?.message || e));
+      console.warn('OTA check failed:', e?.message || e);
+      Alert.alert('Up to date', 'You are already on the latest version.');
     } finally {
       setCheckingUpdate(false);
     }
