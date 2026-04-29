@@ -70,6 +70,11 @@
       "expo-updates",
       "expo-secure-store"
     ],
-    "owner": "setupfx2"
+    "owner": "setupfx2",
+    "extra": {
+      "eas": {
+        "projectId": "20ccee3d-09ef-49c9-9895-1c6e68e9634d"
+      }
+    }
   }
 }
