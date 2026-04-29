@@ -31,6 +31,7 @@ import * as SecureStore from 'expo-secure-store';
 import * as Updates from 'expo-updates';
 import { API_URL, API_BASE_URL, WS_URL } from '../config';
 import { useTheme } from '../context/ThemeContext';
+import { useSettings } from '../context/SettingsContext';
 import socketService from '../services/socketService';
 import { getJsonAuthHeaders } from '../utils/authHeaders';
 import {
@@ -724,7 +725,86 @@ const CHART_BOOTSTRAP_JS = String.raw`
       postMsg({ type: 'ready', symbol: SYMBOL });
       // Apply any positions that arrived before the chart was ready.
       try { syncOverlay(); } catch (e) {}
+      // Light-theme: inject CSS into the TradingView iframe so the resolution /
+      // settings dropdowns don't show black-bar selected highlights.
+      if (!cfg.isDark) { try { injectLightThemeCSS(); } catch (e) {} }
     });
+
+    function injectLightThemeCSS() {
+      var css = ''
+        + ':root,body{'
+        + '--tv-color-popup-element-background-active:#F1F5F9 !important;'
+        + '--tv-color-popup-element-background-hover:#F1F5F9 !important;'
+        + '--tv-color-popup-element-text-active:#0F172A !important;'
+        + '--tv-color-popup-element-text:#0F172A !important;'
+        + '--tv-color-popup-element-text-hover:#0F172A !important;'
+        + '--tv-color-popup-element-divider-background:#E5E7EB !important;'
+        + '--tv-color-popup-background:#FFFFFF !important;'
+        + '--tv-color-popup-element-secondary-text:#64748B !important;'
+        + '--tv-color-platform-background:#F1F5F9 !important;'
+        + '--tv-color-toolbar-button-background-hover:#F1F5F9 !important;'
+        + '--tv-color-toolbar-button-background-active:#F1F5F9 !important;'
+        + '--tv-color-toolbar-button-background-active-hover:#E2E8F0 !important;'
+        + '--tv-color-toolbar-button-text:#0F172A !important;'
+        + '--tv-color-toolbar-button-text-hover:#0F172A !important;'
+        + '--tv-color-toolbar-button-text-active:#1a73e8 !important;'
+        + '--tv-color-toolbar-button-text-active-hover:#1a73e8 !important;'
+        + '}'
+        // High-specificity overrides for hashed TradingView popup item classes —
+        // covers cases where the library doesn't read from the CSS variables above.
+        + '[class*="item-"][class*="hovered"],'
+        + '[class*="item-"][class*="hover"]:hover,'
+        + '[class*="menuItem-"][class*="hover"]:hover{'
+        + 'background-color:#F1F5F9 !important;color:#0F172A !important;}'
+        + '[class*="item-"][class*="active"],'
+        + '[class*="item-"][class*="checked"],'
+        + '[class*="menuItem-"][class*="active"],'
+        + '[class*="menuItem-"][class*="checked"]{'
+        + 'background-color:#E2E8F0 !important;color:#0F172A !important;}'
+        + '[class*="popup-"],[class*="menuWrap-"],[class*="dropdownContent-"]{'
+        + 'background-color:#FFFFFF !important;color:#0F172A !important;}';
+
+      function applyTo(doc) {
+        if (!doc || !doc.head) return;
+        if (doc.getElementById('piphigh-tv-light-css')) return;
+        var s = doc.createElement('style');
+        s.id = 'piphigh-tv-light-css';
+        s.textContent = css;
+        doc.head.appendChild(s);
+      }
+
+      // Apply to top document AND every iframe (TradingView renders the chart
+      // in a nested iframe; popups can also live in a separate iframe).
+      applyTo(document);
+      var frames = document.querySelectorAll('iframe');
+      for (var i = 0; i < frames.length; i++) {
+        var f = frames[i];
+        try {
+          if (f.contentDocument) applyTo(f.contentDocument);
+          f.addEventListener('load', function (ev) {
+            try { applyTo(ev.target.contentDocument); } catch (_) {}
+          });
+        } catch (_) { /* cross-origin, skip */ }
+      }
+      // Watch for new iframes added later (popup menus often spawn one).
+      try {
+        var mo = new MutationObserver(function (muts) {
+          for (var i = 0; i < muts.length; i++) {
+            var added = muts[i].addedNodes;
+            for (var j = 0; j < added.length; j++) {
+              var n = added[j];
+              if (n && n.tagName === 'IFRAME') {
+                try { if (n.contentDocument) applyTo(n.contentDocument); } catch (_) {}
+                n.addEventListener('load', function (ev) {
+                  try { applyTo(ev.target.contentDocument); } catch (_) {}
+                });
+              }
+            }
+          }
+        });
+        mo.observe(document.body, { childList: true, subtree: true });
+      } catch (_) {}
+    }
   } catch (e) {
     setStatus('Could not initialise the chart.');
     postMsg({ type: 'error', message: String(e && e.message || e) });
@@ -5554,6 +5634,8 @@ const CHART_ADD_SYMBOL_SEGMENTS = ['Forex', 'Metals', 'Commodities', 'Crypto', '
 const ChartTab = ({ route }) => {
   const ctx = React.useContext(TradingContext);
   const { colors, isDark } = useTheme();
+  const { showChartQuickTrade } = useSettings();
+  const insets = useSafeAreaInsets();
   const toast = useToast();
   
   // Get initial symbol from route params or default to XAUUSD (always uppercase for API / livePrices keys)
@@ -5907,6 +5989,27 @@ const ChartTab = ({ route }) => {
   html,body{height:100%;width:100%;background:${chartBg};overflow:hidden;font-family:-apple-system,Segoe UI,Roboto,sans-serif;}
   #tv_chart{position:absolute;inset:0;}
   #status{position:absolute;inset:0;display:none;align-items:center;justify-content:center;color:${isDark ? '#bbb' : '#444'};font-size:13px;text-align:center;padding:0 24px;background:${chartBg};z-index:5;}
+  ${!isDark ? `
+  /* Light-theme overrides for TradingView popup menus (resolution / interval picker, etc.) */
+  :root,body{
+    --tv-color-popup-element-background-active:#F1F5F9 !important;
+    --tv-color-popup-element-background-hover:#F1F5F9 !important;
+    --tv-color-popup-element-text-active:#0F172A !important;
+    --tv-color-popup-element-text:#0F172A !important;
+    --tv-color-popup-element-text-hover:#0F172A !important;
+    --tv-color-popup-element-divider-background:#E5E7EB !important;
+    --tv-color-popup-background:#FFFFFF !important;
+    --tv-color-popup-element-secondary-text:#64748B !important;
+    --tv-color-platform-background:#F1F5F9 !important;
+    --tv-color-toolbar-button-background-hover:#F1F5F9 !important;
+    --tv-color-toolbar-button-background-active:#F1F5F9 !important;
+    --tv-color-toolbar-button-background-active-hover:#E2E8F0 !important;
+    --tv-color-toolbar-button-text:#0F172A !important;
+    --tv-color-toolbar-button-text-hover:#0F172A !important;
+    --tv-color-toolbar-button-text-active:#1a73e8 !important;
+    --tv-color-toolbar-button-text-active-hover:#1a73e8 !important;
+  }
+  ` : ''}
 </style>
 </head><body>
 <div id="tv_chart"></div>
@@ -5966,8 +6069,9 @@ const ChartTab = ({ route }) => {
   const newsUrl = `https://www.tradingview.com/embed-widget/timeline/?locale=en&feedMode=symbol&symbol=${encodedSymbol}&colorTheme=${chartTheme}&isTransparent=true&displayMode=regular&width=100%25&height=100%25`;
 
   return (
-    <View style={[styles.chartContainer, { backgroundColor: colors.bgPrimary }]}>
-      {/* Quick Trade Bar at TOP - SELL | lot | BUY */}
+    <View style={[styles.chartContainer, { backgroundColor: colors.bgPrimary, paddingTop: insets.top }]}>
+      {/* Quick Trade Bar at TOP - SELL | lot | BUY (toggle in More → "Chart Quick Trade") */}
+      {showChartQuickTrade && (
       <View style={[styles.quickTradeBarTop, { backgroundColor: colors.bgCard, borderBottomColor: colors.border, zIndex: 10, elevation: Platform.OS === 'android' ? 8 : 0 }]}>
         {/* SELL Button with Price */}
         <TouchableOpacity
@@ -6024,6 +6128,7 @@ const ChartTab = ({ route }) => {
           <Text style={styles.buyPrice}>{currentPrice?.ask?.toFixed(decimals) || '-'}</Text>
         </TouchableOpacity>
       </View>
+      )}
 
       {/* Chart Tabs + NEWS tab */}
       <View style={[styles.chartTabsBar, { backgroundColor: colors.bgSecondary, borderBottomColor: colors.border }]}>
@@ -6386,6 +6491,7 @@ const ChartTab = ({ route }) => {
 const MoreTab = ({ navigation }) => {
   const ctx = React.useContext(TradingContext);
   const { colors, isDark, toggleTheme } = useTheme();
+  const { showChartQuickTrade, toggleChartQuickTrade } = useSettings();
   const parentNav = navigation.getParent();
   const [checkingUpdate, setCheckingUpdate] = useState(false);
 
@@ -6495,6 +6601,25 @@ const MoreTab = ({ navigation }) => {
             onPress={toggleTheme}
           >
             <View style={[styles.themeToggleThumb, isDark && styles.themeToggleThumbActive]} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Chart Quick Trade (Buy/Sell bar) Toggle */}
+        <View style={[styles.themeToggleItem, { borderBottomColor: colors.border }]}>
+          <View style={[styles.moreMenuIcon, { backgroundColor: `${colors.primary}20` }]}>
+            <Ionicons name="flash-outline" size={20} color={colors.primary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.moreMenuItemText, { color: colors.textPrimary }]}>Chart Quick Trade</Text>
+            <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
+              Show one-click Buy/Sell bar above the chart
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.themeToggle, { backgroundColor: showChartQuickTrade ? colors.primary : colors.border }, showChartQuickTrade && styles.themeToggleActive]}
+            onPress={toggleChartQuickTrade}
+          >
+            <View style={[styles.themeToggleThumb, showChartQuickTrade && styles.themeToggleThumbActive]} />
           </TouchableOpacity>
         </View>
 

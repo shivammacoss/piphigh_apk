@@ -39,7 +39,9 @@ const darkTheme = {
   },
 };
 
-/** Light — BG #FFFFFF, Card #F8FAFC, Blue #1a73e8 */
+/** Light — clean Exness-style white UI. Cards are pure white separated by
+ *  visible borders, secondary panels are a subtle off-white. Text contrast
+ *  is strong against white so labels stay readable. */
 const lightTheme = {
   name: 'Light',
   isDark: false,
@@ -49,24 +51,30 @@ const lightTheme = {
     secondary: '#1a73e8',
     accent: '#1a73e8',
     bgPrimary: '#FFFFFF',
-    bgSecondary: '#F8FAFC',
-    bgCard: '#F8FAFC',
+    bgSecondary: '#F4F6F9',
+    bgCard: '#FFFFFF',
     bgHover: '#F1F5F9',
     textPrimary: '#0F172A',
     textSecondary: '#475569',
     textMuted: '#64748B',
-    border: '#E2E8F0',
-    borderLight: '#F1F5F9',
-    success: '#22C55E',
-    error: '#EF4444',
-    warning: '#F59E0B',
+    border: '#E5E7EB',
+    borderLight: '#EEF2F6',
+    success: '#16A34A',
+    error: '#DC2626',
+    warning: '#D97706',
     info: '#1a73e8',
-    buyColor: '#22C55E',
-    sellColor: '#EF4444',
-    profitColor: '#22C55E',
-    lossColor: '#EF4444',
+    buyColor: '#16A34A',
+    sellColor: '#DC2626',
+    profitColor: '#16A34A',
+    lossColor: '#DC2626',
     tabBarBg: '#FFFFFF',
-    cardBg: '#F8FAFC',
+    cardBg: '#FFFFFF',
+    purple: '#7C3AED',
+    cyan: '#0891B2',
+    orange: '#EA580C',
+    pink: '#DB2777',
+    yellow: '#CA8A04',
+    lime: '#65A30D',
   },
 };
 

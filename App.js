@@ -8,6 +8,7 @@ import { View, Text, StyleSheet, LogBox, AppState } from 'react-native';
 import * as Updates from 'expo-updates';
 import { AuthProvider } from './src/context/AuthContext';
 import { ThemeProvider, useTheme } from './src/context/ThemeContext';
+import { SettingsProvider } from './src/context/SettingsContext';
 import { I18nProvider } from './src/i18n';
 
 // Ignore specific warnings for better performance
@@ -183,9 +184,11 @@ function AppWithNavigation() {
 export default function App() {
   return (
     <ThemeProvider>
-      <I18nProvider>
-        <AppWithNavigation />
-      </I18nProvider>
+      <SettingsProvider>
+        <I18nProvider>
+          <AppWithNavigation />
+        </I18nProvider>
+      </SettingsProvider>
     </ThemeProvider>
   );
 }
