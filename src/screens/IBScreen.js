@@ -28,11 +28,8 @@ const IBScreen = ({ navigation, route }) => {
   const [referrals, setReferrals] = useState([]);
   const [commissions, setCommissions] = useState([]);
   const [downline, setDownline] = useState([]);
-  const [levelProgress, setLevelProgress] = useState(null);
   const [activeTab, setActiveTab] = useState('overview');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [withdrawAmount, setWithdrawAmount] = useState('');
-  const [showWithdrawModal, setShowWithdrawModal] = useState(false);
 
   useEffect(() => {
     loadUser();
@@ -95,13 +92,20 @@ const IBScreen = ({ navigation, route }) => {
             });
             if (dashRes.ok) {
               const dash = await dashRes.json();
-              profileData.ibWalletBalance = dash.wallet_balance || dash.ib_wallet_balance || 0;
-              profileData.totalCommissionEarned = dash.total_commission || dash.total_earned || 0;
+              profileData.totalEarned = Number(dash.total_earned || 0);
+              profileData.totalCommission = Number(dash.total_commission || 0);
+              profileData.totalCommissionEarned = Number(dash.total_earned || dash.total_commission || 0);
+              profileData.pendingPayout = Number(dash.pending_payout || 0);
+              profileData.ibWalletBalance = Number(dash.pending_payout || 0);
+              profileData.level = Number(dash.level || 1);
+              profileData.totalReferrals = Number(dash.total_referrals || 0);
+              profileData.isActive = !!dash.is_active;
               profileData.stats = {
-                directReferrals: dash.direct_referrals || dash.total_referrals || 0,
-                totalDownline: dash.total_downline || 0,
+                directReferrals: Number(dash.total_referrals || 0),
+                totalDownline: 0,
               };
               profileData.referralCode = dash.referral_code || profileData.referralCode;
+              profileData.referralLink = dash.referral_link || '';
             }
           } catch (e) { console.error('Dashboard fetch error:', e); }
         }
@@ -123,13 +127,20 @@ const IBScreen = ({ navigation, route }) => {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await res.json();
-      const items = (data.items || data.referrals || []).map(r => ({
-        ...r,
-        _id: r.id || r._id,
-        firstName: r.first_name || r.firstName,
-        lastName: r.last_name || r.lastName,
-        createdAt: r.created_at || r.createdAt,
-      }));
+      const items = (data.items || []).map(r => {
+        const u = r.referred_user || {};
+        const fullName = (u.name || '').trim();
+        const [firstName, ...rest] = fullName.split(' ');
+        return {
+          _id: r.id,
+          firstName: firstName || (u.email || '').charAt(0).toUpperCase(),
+          lastName: rest.join(' '),
+          email: u.email || '',
+          createdAt: u.joined_at || r.created_at,
+          totalDeposit: Number(r.total_deposit || 0),
+          accountsCount: r.accounts_count || 0,
+        };
+      });
       setReferrals(items);
     } catch (e) {
       console.error('Error fetching referrals:', e);
@@ -143,14 +154,40 @@ const IBScreen = ({ navigation, route }) => {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await res.json();
-      const items = (data.items || data.commissions || []).map(c => ({
-        ...c,
-        _id: c.id || c._id,
-      }));
+      const items = (data.items || []).map(c => {
+        const u = c.source_user || {};
+        return {
+          _id: c.id,
+          sourceName: u.name || u.email || '—',
+          sourceEmail: u.email || '',
+          commissionType: c.commission_type || '',
+          amount: Number(c.amount || 0),
+          mlmLevel: c.mlm_level || 1,
+          status: (c.status || 'pending').toLowerCase(),
+          createdAt: c.created_at,
+        };
+      });
       setCommissions(items);
     } catch (e) {
       console.error('Error fetching commissions:', e);
     }
+  };
+
+  const flattenTree = (nodes, out = []) => {
+    for (const n of nodes || []) {
+      const nameParts = (n.name || n.email || '').split(' ');
+      out.push({
+        _id: n.id,
+        firstName: nameParts[0] || (n.email || '?').charAt(0).toUpperCase(),
+        email: n.email || '',
+        level: n.depth || 1,
+        totalEarned: Number(n.total_earned || 0),
+        isActive: !!n.is_active,
+        isIB: !!n.referral_code,
+      });
+      if (n.children?.length) flattenTree(n.children, out);
+    }
+    return out;
   };
 
   const fetchDownline = async () => {
@@ -159,8 +196,13 @@ const IBScreen = ({ navigation, route }) => {
       const res = await fetch(`${API_URL}/business/ib/tree`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (!res.ok) { setDownline([]); return; }
       const data = await res.json();
-      setDownline(data.tree?.downlines || data.downlines || data.items || []);
+      const flat = flattenTree(data.tree || []);
+      setDownline(flat);
+      if (flat.length) {
+        setIbProfile((p) => p ? { ...p, stats: { ...(p.stats || {}), totalDownline: data.total_nodes || flat.length } } : p);
+      }
     } catch (e) {
       console.error('Error fetching downline:', e);
     }
@@ -196,58 +238,23 @@ const IBScreen = ({ navigation, route }) => {
     setIsSubmitting(false);
   };
 
-  const handleWithdraw = async () => {
-    if (!withdrawAmount || parseFloat(withdrawAmount) <= 0) {
-      Alert.alert('Error', 'Please enter a valid amount');
-      return;
-    }
-    if (parseFloat(withdrawAmount) > (ibProfile?.ibWalletBalance || 0)) {
-      Alert.alert('Error', 'Insufficient balance');
-      return;
-    }
-
-    setIsSubmitting(true);
-    try {
-      const res = await fetch(`${API_URL}/ib/withdraw`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: user._id,
-          amount: parseFloat(withdrawAmount)
-        })
-      });
-      const data = await res.json();
-      if (data.status || data.success) {
-        Alert.alert('Success', data.message || 'Withdrawal request submitted');
-        setWithdrawAmount('');
-        setShowWithdrawModal(false);
-        fetchIBProfile();
-      } else {
-        Alert.alert('Error', data.message || 'Failed to withdraw');
-      }
-    } catch (e) {
-      Alert.alert('Error', 'Failed to process withdrawal');
-    }
-    setIsSubmitting(false);
-  };
-
   const copyReferralLink = async () => {
-    if (ibProfile?.referralCode) {
-      const link = `https://yourapp.com/signup?ref=${ibProfile.referralCode}`;
-      await Clipboard.setStringAsync(link);
-      Alert.alert('Copied!', 'Referral link copied to clipboard');
-    }
+    const link = ibProfile?.referralLink || (ibProfile?.referralCode ? `?ref=${ibProfile.referralCode}` : '');
+    if (!link) return;
+    await Clipboard.setStringAsync(link);
+    Alert.alert('Copied!', 'Referral link copied to clipboard');
   };
 
   const shareReferralLink = async () => {
-    if (ibProfile?.referralCode) {
-      try {
-        await Share.share({
-          message: `Join me on this amazing trading platform! Use my referral code: ${ibProfile.referralCode}\n\nSign up here: https://yourapp.com/signup?ref=${ibProfile.referralCode}`,
-        });
-      } catch (e) {
-        console.error('Error sharing:', e);
-      }
+    const link = ibProfile?.referralLink;
+    const code = ibProfile?.referralCode;
+    if (!link && !code) return;
+    try {
+      await Share.share({
+        message: `Join me on PipHigh — use my referral code: ${code}\n\nSign up: ${link || ''}`,
+      });
+    } catch (e) {
+      console.error('Error sharing:', e);
     }
   };
 
@@ -269,7 +276,7 @@ const IBScreen = ({ navigation, route }) => {
     );
   }
 
-  const tabs = ['overview', 'referrals', 'commissions', 'downline', 'withdraw'];
+  const tabs = ['overview', 'referrals', 'commissions', 'downline'];
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bgPrimary }]}>
@@ -357,51 +364,31 @@ const IBScreen = ({ navigation, route }) => {
             <View style={styles.statsGrid}>
               <View style={[styles.statCard, { backgroundColor: colors.bgCard, borderColor: colors.border }]}>
                 <View style={[styles.statIcon, { backgroundColor: '#22c55e20' }]}>
-                  <Ionicons name="cash" size={20} color="#22c55e" />
-                </View>
-                <Text style={[styles.statLabel, { color: colors.textMuted }]}>Available Balance</Text>
-                <Text style={[styles.statValue, { color: colors.textPrimary }]}>${ibProfile?.ibWalletBalance?.toFixed(2) || '0.00'}</Text>
-              </View>
-              <View style={[styles.statCard, { backgroundColor: colors.bgCard, borderColor: colors.border }]}>
-                <View style={[styles.statIcon, { backgroundColor: '#1a73e820' }]}>
-                  <Ionicons name="trending-up" size={20} color="#1a73e8" />
+                  <Ionicons name="trending-up" size={20} color="#22c55e" />
                 </View>
                 <Text style={[styles.statLabel, { color: colors.textMuted }]}>Total Earned</Text>
-                <Text style={[styles.statValue, { color: colors.textPrimary }]}>${ibProfile?.totalCommissionEarned?.toFixed(2) || '0.00'}</Text>
+                <Text style={[styles.statValue, { color: colors.textPrimary }]}>${(ibProfile?.totalEarned || 0).toFixed(2)}</Text>
+              </View>
+              <View style={[styles.statCard, { backgroundColor: colors.bgCard, borderColor: colors.border }]}>
+                <View style={[styles.statIcon, { backgroundColor: '#eab30820' }]}>
+                  <Ionicons name="time" size={20} color="#eab308" />
+                </View>
+                <Text style={[styles.statLabel, { color: colors.textMuted }]}>Pending Payout</Text>
+                <Text style={[styles.statValue, { color: colors.textPrimary }]}>${(ibProfile?.pendingPayout || 0).toFixed(2)}</Text>
               </View>
               <View style={[styles.statCard, { backgroundColor: colors.bgCard, borderColor: colors.border }]}>
                 <View style={[styles.statIcon, { backgroundColor: '#a855f720' }]}>
                   <Ionicons name="people" size={20} color="#a855f7" />
                 </View>
-                <Text style={[styles.statLabel, { color: colors.textMuted }]}>Direct Referrals</Text>
-                <Text style={[styles.statValue, { color: colors.textPrimary }]}>{ibProfile?.stats?.directReferrals || 0}</Text>
+                <Text style={[styles.statLabel, { color: colors.textMuted }]}>Referrals</Text>
+                <Text style={[styles.statValue, { color: colors.textPrimary }]}>{ibProfile?.totalReferrals || 0}</Text>
               </View>
               <View style={[styles.statCard, { backgroundColor: colors.bgCard, borderColor: colors.border }]}>
                 <View style={[styles.statIcon, { backgroundColor: '#f9731620' }]}>
-                  <Ionicons name="git-network" size={20} color="#f97316" />
+                  <Ionicons name="ribbon" size={20} color="#f97316" />
                 </View>
-                <Text style={[styles.statLabel, { color: colors.textMuted }]}>Total Downline</Text>
-                <Text style={[styles.statValue, { color: colors.textPrimary }]}>{ibProfile?.stats?.totalDownline || 0}</Text>
-              </View>
-            </View>
-
-            {/* Commission Rate & Referral Link */}
-            <View style={styles.infoCardsRow}>
-              {/* Commission Rate */}
-              <View style={[styles.commissionRateCard, { backgroundColor: colors.bgCard, borderColor: colors.border }]}>
-                <Text style={[styles.cardLabel, { color: colors.textMuted }]}>Your Commission Rate</Text>
-                <View style={styles.commissionRateRow}>
-                  <View>
-                    <Text style={[styles.commissionRateValue, { color: colors.textPrimary }]}>
-                      ${levelProgress?.currentLevel?.commissionRate || 2}
-                      <Text style={[styles.commissionRateUnit, { color: colors.textMuted }]}>/lot</Text>
-                    </Text>
-                    <Text style={[styles.levelName, { color: colors.textMuted }]}>Level: {levelProgress?.currentLevel?.name || 'Standard'}</Text>
-                  </View>
-                  <View style={[styles.commissionIcon, { backgroundColor: (levelProgress?.currentLevel?.color || '#22c55e') + '30' }]}>
-                    <Ionicons name="cash" size={24} color={levelProgress?.currentLevel?.color || '#22c55e'} />
-                  </View>
-                </View>
+                <Text style={[styles.statLabel, { color: colors.textMuted }]}>Level</Text>
+                <Text style={[styles.statValue, { color: colors.textPrimary }]}>L{ibProfile?.level || 1}</Text>
               </View>
             </View>
 
@@ -409,7 +396,7 @@ const IBScreen = ({ navigation, route }) => {
             <View style={styles.referralLinkCard}>
               <Text style={styles.referralLinkLabel}>Your Referral Link</Text>
               <Text style={styles.referralLinkText} numberOfLines={1}>
-                https://yourapp.com/signup?ref={ibProfile?.referralCode}
+                {ibProfile?.referralLink || `?ref=${ibProfile?.referralCode || ''}`}
               </Text>
               <Text style={styles.referralCodeText}>Code: <Text style={styles.referralCodeBold}>{ibProfile?.referralCode}</Text></Text>
               <View style={styles.referralActions}>
@@ -422,28 +409,6 @@ const IBScreen = ({ navigation, route }) => {
                 </TouchableOpacity>
               </View>
             </View>
-
-            {/* Level Progress */}
-            {levelProgress?.nextLevel && (
-              <View style={[styles.levelProgressCard, { backgroundColor: colors.bgCard, borderColor: colors.border }]}>
-                <View style={styles.levelProgressHeader}>
-                  <Ionicons name="ribbon" size={20} color="#1a73e8" />
-                  <Text style={[styles.levelProgressTitle, { color: colors.textPrimary }]}>Commission Levels</Text>
-                </View>
-                <View style={styles.progressBarContainer}>
-                  <View style={styles.progressBarLabels}>
-                    <Text style={styles.progressLabel}>Progress to {levelProgress.nextLevel.name}</Text>
-                    <Text style={styles.progressPercent}>{levelProgress.progressPercent}%</Text>
-                  </View>
-                  <View style={styles.progressBarBg}>
-                    <View style={[styles.progressBarFill, { width: `${levelProgress.progressPercent}%` }]} />
-                  </View>
-                  <Text style={styles.progressHint}>
-                    {levelProgress.referralsNeeded} more referrals needed for {levelProgress.nextLevel.name}
-                  </Text>
-                </View>
-              </View>
-            )}
 
             {/* Tabs */}
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabsScroll}>
@@ -491,13 +456,20 @@ const IBScreen = ({ navigation, route }) => {
                     referrals.map((ref) => (
                       <View key={ref._id} style={[styles.referralItem, { backgroundColor: colors.bgCard, borderColor: colors.border }]}>
                         <View style={styles.referralAvatar}>
-                          <Text style={styles.avatarText}>{ref.firstName?.charAt(0)}</Text>
+                          <Text style={styles.avatarText}>{(ref.firstName || '?').charAt(0)}</Text>
                         </View>
                         <View style={styles.referralInfo}>
-                          <Text style={[styles.referralName, { color: colors.textPrimary }]}>{ref.firstName} {ref.lastName}</Text>
-                          <Text style={styles.referralEmail}>{ref.email}</Text>
+                          <Text style={[styles.referralName, { color: colors.textPrimary }]} numberOfLines={1}>
+                            {`${ref.firstName || ''} ${ref.lastName || ''}`.trim() || ref.email}
+                          </Text>
+                          <Text style={styles.referralEmail} numberOfLines={1}>{ref.email}</Text>
                         </View>
-                        <Text style={styles.referralDate}>{formatDate(ref.createdAt)}</Text>
+                        <View style={{ alignItems: 'flex-end' }}>
+                          <Text style={[styles.referralName, { color: colors.textPrimary, fontSize: 13 }]}>
+                            ${ref.totalDeposit.toFixed(2)}
+                          </Text>
+                          <Text style={styles.referralDate}>{ref.createdAt ? formatDate(ref.createdAt) : '—'}</Text>
+                        </View>
                       </View>
                     ))
                   )}
@@ -517,13 +489,17 @@ const IBScreen = ({ navigation, route }) => {
                     commissions.map((comm) => (
                       <View key={comm._id} style={[styles.commissionItem, { backgroundColor: colors.bgCard, borderColor: colors.border }]}>
                         <View style={styles.commissionItemLeft}>
-                          <Text style={[styles.commissionSymbol, { color: colors.textPrimary }]}>{comm.symbol}</Text>
-                          <Text style={styles.commissionMeta}>Level {comm.level} • {comm.tradeLotSize?.toFixed(2)} lots</Text>
+                          <Text style={[styles.commissionSymbol, { color: colors.textPrimary }]} numberOfLines={1}>{comm.sourceName}</Text>
+                          <Text style={styles.commissionMeta}>
+                            {(comm.commissionType || '').replace('_', ' ')} • L{comm.mlmLevel}
+                          </Text>
                         </View>
                         <View style={styles.commissionItemRight}>
-                          <Text style={styles.commissionAmount}>${comm.commissionAmount?.toFixed(2)}</Text>
-                          <View style={[styles.commissionStatus, { backgroundColor: comm.status === 'CREDITED' ? '#22c55e20' : '#ef444420' }]}>
-                            <Text style={[styles.commissionStatusText, { color: comm.status === 'CREDITED' ? '#22c55e' : '#ef4444' }]}>{comm.status}</Text>
+                          <Text style={styles.commissionAmount}>${comm.amount.toFixed(2)}</Text>
+                          <View style={[styles.commissionStatus, { backgroundColor: comm.status === 'paid' ? '#22c55e20' : '#eab30820' }]}>
+                            <Text style={[styles.commissionStatusText, { color: comm.status === 'paid' ? '#22c55e' : '#eab308' }]}>
+                              {comm.status}
+                            </Text>
                           </View>
                         </View>
                       </View>
@@ -544,59 +520,25 @@ const IBScreen = ({ navigation, route }) => {
                   ) : (
                     downline.map((node, idx) => (
                       <View key={node._id || idx} style={[styles.downlineItem, { backgroundColor: colors.bgCard, borderColor: colors.border }]}>
-                        <View style={[styles.downlineAvatar, { backgroundColor: node.isIB ? '#1a73e830' : '#33333' }]}>
+                        <View style={[styles.downlineAvatar, { backgroundColor: node.isIB ? '#1a73e830' : '#33333320' }]}>
                           <Text style={[styles.avatarText, { color: node.isIB ? '#1a73e8' : '#888' }]}>{node.firstName?.charAt(0) || '?'}</Text>
                         </View>
                         <View style={styles.downlineInfo}>
-                          <Text style={[styles.downlineName, { color: colors.textPrimary }]}>{node.firstName || 'Unknown'}</Text>
-                          <Text style={styles.downlineEmail}>{node.email}</Text>
+                          <Text style={[styles.downlineName, { color: colors.textPrimary }]} numberOfLines={1}>{node.firstName || node.email || 'Unknown'}</Text>
+                          <Text style={styles.downlineEmail} numberOfLines={1}>{node.email}</Text>
                         </View>
-                        <View style={[styles.downlineBadge, { backgroundColor: node.isIB ? '#1a73e820' : '#33333' }]}>
-                          <Text style={[styles.downlineBadgeText, { color: node.isIB ? '#1a73e8' : '#888' }]}>
-                            {node.isIB ? 'IB' : 'User'} • L{(node.level || 0) + 1}
+                        <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                          <Text style={{ color: '#22c55e', fontSize: 12, fontWeight: '700' }}>
+                            ${node.totalEarned.toFixed(2)}
                           </Text>
+                          <View style={[styles.downlineBadge, { backgroundColor: node.isIB ? '#1a73e820' : '#33333320' }]}>
+                            <Text style={[styles.downlineBadgeText, { color: node.isIB ? '#1a73e8' : '#888' }]}>
+                              {node.isIB ? 'IB' : 'User'} • L{node.level}
+                            </Text>
+                          </View>
                         </View>
                       </View>
                     ))
-                  )}
-                </View>
-              )}
-
-              {/* Withdraw Tab */}
-              {activeTab === 'withdraw' && (
-                <View style={styles.withdrawContainer}>
-                  <View style={[styles.withdrawBalanceCard, { backgroundColor: colors.bgCard, borderColor: colors.border }]}>
-                    <Text style={[styles.withdrawBalanceLabel, { color: colors.textMuted }]}>Available to Withdraw</Text>
-                    <Text style={styles.withdrawBalanceValue}>${ibProfile?.ibWalletBalance?.toFixed(2) || '0.00'}</Text>
-                  </View>
-                  
-                  <Text style={[styles.inputLabel, { color: colors.textMuted }]}>Withdrawal Amount</Text>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: colors.bgCard, borderColor: colors.border, color: colors.textPrimary }]}
-                    value={withdrawAmount}
-                    onChangeText={setWithdrawAmount}
-                    placeholder="Enter amount"
-                    placeholderTextColor="#666"
-                    keyboardType="numeric"
-                  />
-                  
-                  <TouchableOpacity 
-                    style={[styles.withdrawBtn, isSubmitting && styles.btnDisabled]} 
-                    onPress={handleWithdraw}
-                    disabled={isSubmitting}
-                  >
-                    {isSubmitting ? (
-                      <ActivityIndicator color="#000" />
-                    ) : (
-                      <Text style={styles.withdrawBtnText}>Request Withdrawal</Text>
-                    )}
-                  </TouchableOpacity>
-
-                  {ibProfile?.pendingWithdrawal > 0 && (
-                    <View style={styles.pendingWithdrawal}>
-                      <Ionicons name="time-outline" size={16} color="#eab308" />
-                      <Text style={styles.pendingWithdrawalText}>Pending: ${ibProfile.pendingWithdrawal.toFixed(2)}</Text>
-                    </View>
                   )}
                 </View>
               )}
