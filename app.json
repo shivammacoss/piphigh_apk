@@ -22,7 +22,6 @@
     "updates": {
       "enabled": true,
       "fallbackToCacheTimeout": 3000,
-      "url": "https://u.expo.dev/37189d1e-c9b2-4d37-aaf1-185c00758d77",
       "requestHeaders": {
         "expo-channel-name": "preview"
       }
@@ -66,16 +65,11 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "extra": {
-      "eas": {
-        "projectId": "37189d1e-c9b2-4d37-aaf1-185c00758d77"
-      }
-    },
     "plugins": [
       "expo-font",
       "expo-updates",
       "expo-secure-store"
     ],
-    "owner": "shivam92388"
+    "owner": "setupfx2"
   }
 }
