@@ -24,7 +24,8 @@
       "fallbackToCacheTimeout": 3000,
       "requestHeaders": {
         "expo-channel-name": "preview"
-      }
+      },
+      "url": "https://u.expo.dev/20ccee3d-09ef-49c9-9895-1c6e68e9634d"
     },
     "ios": {
       "supportsTablet": true,
