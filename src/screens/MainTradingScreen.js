@@ -149,6 +149,8 @@ const CHART_BOOTSTRAP_JS = String.raw`
     BTCUSD:'BTCUSDT', ETHUSD:'ETHUSDT', LTCUSD:'LTCUSDT', XRPUSD:'XRPUSDT',
     SOLUSD:'SOLUSDT', BNBUSD:'BNBUSDT', DOGEUSD:'DOGEUSDT', ADAUSD:'ADAUSDT',
     TRXUSD:'TRXUSDT', LINKUSD:'LINKUSDT', DOTUSD:'DOTUSDT', AVAXUSD:'AVAXUSDT',
+    XAUUSD:'PAXGUSDT',
+    EURUSD:'EURUSDT',
   };
   function isBinanceSym(s) { return !!BINANCE_MAP[String(s || '').toUpperCase()]; }
   function toBinance(s) { return BINANCE_MAP[String(s || '').toUpperCase()]; }
@@ -277,24 +279,49 @@ const CHART_BOOTSTRAP_JS = String.raw`
     },
   };
 
-  function fetchBackend(sym, resolution, from, to, done, onError) {
+  function fetchBackendOnce(sym, resolution, from, to) {
     var url = API_BASE + '/instruments/' + encodeURIComponent(sym) + '/bars'
             + '?resolution=' + encodeURIComponent(resolution)
             + '&from=' + from + '&to=' + to;
-    fetch(url, { headers: authHeaders() }).then(function (r) {
+    return fetch(url, { headers: authHeaders() }).then(function (r) {
       if (!r.ok) throw new Error('bars HTTP ' + r.status);
       return r.json();
     }).then(function (data) {
       var raw = (data && Array.isArray(data.bars)) ? data.bars : (Array.isArray(data) ? data : []);
-      var bars = raw.map(function (b) {
+      return raw.map(function (b) {
         var t = Number(b.time || b.t || 0);
-        if (t < 1e12) t *= 1000;  // backend may return seconds
+        if (t < 1e12) t *= 1000;
         return { time: t, open: +b.open, high: +b.high, low: +b.low, close: +b.close, volume: +(b.volume || 0) };
       }).filter(function (b) { return isFinite(b.open) && b.time > 0; });
-      done(bars);
-    }).catch(function (e) {
-      // Last-ditch: signal no-data so the chart doesn't error out.
-      done([]);
+    });
+  }
+
+  function fetchBackend(sym, resolution, from, to, done, onError) {
+    var isIntraday = String(resolution) !== 'D' && String(resolution) !== '1D';
+    var daySec = 86400;
+    // Daily fallback reaches back ~10 years so the chart never looks truncated.
+    var dailyFromCap = Math.floor(Date.now() / 1000) - daySec * 365 * 10;
+
+    fetchBackendOnce(sym, resolution, from, to).then(function (bars) {
+      if (!isIntraday) { done(bars); return; }
+      // Backend often only stores daily history. Fall back to daily whenever
+      // the intraday response is sparse OR doesn't cover the requested window,
+      // so old candles still show instead of leaving the chart mostly empty.
+      var oldestSec = bars.length ? Math.floor(bars[0].time / 1000) : to;
+      var span = Math.max(1, to - from);
+      var coverageGap = oldestSec - from;
+      var sparse = bars.length < 20 || coverageGap > span * 0.25;
+      if (!sparse) { done(bars); return; }
+      var dailyFrom = Math.min(from, dailyFromCap);
+      fetchBackendOnce(sym, 'D', dailyFrom, to).then(function (dailyBars) {
+        done(dailyBars.length > bars.length ? dailyBars : bars);
+      }).catch(function () { done(bars); });
+    }).catch(function () {
+      // Backend failed entirely — try daily as a last resort.
+      var dailyFrom = Math.min(from, dailyFromCap);
+      fetchBackendOnce(sym, 'D', dailyFrom, to).then(function (dailyBars) {
+        done(dailyBars);
+      }).catch(function () { done([]); });
     });
   }
 

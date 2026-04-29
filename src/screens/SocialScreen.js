@@ -22,10 +22,10 @@ const { width: SCREEN_W } = Dimensions.get('window');
 
 const TABS = [
   { id: 'leaderboard', label: 'Leaderboard' },
-  { id: 'my-copies', label: 'My Copies' },
-  { id: 'mamm', label: 'MAM/PAMM' },
+  { id: 'my-copies', label: 'My Subscriptions' },
+  { id: 'mamm', label: 'MAM / PAMM' },
   { id: 'investments', label: 'My Investments' },
-  { id: 'provider', label: 'Become Provider' },
+  { id: 'provider', label: 'Become MAM Master' },
   { id: 'dashboard', label: 'My Dashboard' },
 ];
 
@@ -47,6 +47,10 @@ async function authHeaders() {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
+}
+
+function fmtMoney(n) {
+  return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export default function SocialScreen({ navigation }) {
@@ -116,6 +120,8 @@ export default function SocialScreen({ navigation }) {
   const [dashError, setDashError] = useState(null);
   const [perfData, setPerfData] = useState(null);
   const [investorsList, setInvestorsList] = useState([]);
+  const [followersList, setFollowersList] = useState([]);
+  const [followersLoading, setFollowersLoading] = useState(false);
 
   const loadAccounts = async () => {
     try {
@@ -187,6 +193,23 @@ export default function SocialScreen({ navigation }) {
     setMammLoading(false);
   }, []);
 
+  const fetchFollowers = useCallback(async () => {
+    setFollowersLoading(true);
+    try {
+      const h = await authHeaders();
+      const res = await fetch(`${API_URL}/followers/my-followers`, { headers: h });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setFollowersList(data.followers || data.items || []);
+      } else {
+        setFollowersList([]);
+      }
+    } catch (e) {
+      setFollowersList([]);
+    }
+    setFollowersLoading(false);
+  }, []);
+
   const fetchDashboard = useCallback(async () => {
     setDashLoading(true);
     setDashError(null);
@@ -199,16 +222,21 @@ export default function SocialScreen({ navigation }) {
         setDashError(data.detail || 'Not a provider yet');
       } else {
         setDash(data);
-        // Fetch performance + investors when provider is approved
+        // Fetch performance + investors + followers when provider is approved
         if (data?.status === 'approved' || data?.id) {
-          const [perfRes, invRes] = await Promise.all([
+          const [perfRes, invRes, folRes] = await Promise.all([
             fetch(`${API_URL}/social/master-performance`, { headers: h }).catch(() => null),
             fetch(`${API_URL}/social/master-investors`, { headers: h }).catch(() => null),
+            fetch(`${API_URL}/followers/my-followers`, { headers: h }).catch(() => null),
           ]);
           if (perfRes?.ok) setPerfData(await perfRes.json().catch(() => null));
           if (invRes?.ok) {
             const invData = await invRes.json().catch(() => ({}));
             setInvestorsList(invData.investors || invData.items || []);
+          }
+          if (folRes?.ok) {
+            const folData = await folRes.json().catch(() => ({}));
+            setFollowersList(folData.followers || folData.items || []);
           }
         }
       }
@@ -486,7 +514,7 @@ export default function SocialScreen({ navigation }) {
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backHit}>
           <Ionicons name="arrow-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={[styles.screenTitle, { color: colors.textPrimary }]}>Social</Text>
+        <Text style={[styles.screenTitle, { color: colors.textPrimary }]}>MAM Trading</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -505,9 +533,9 @@ export default function SocialScreen({ navigation }) {
             },
           ]}
         >
-          <Text style={[styles.heroTitle, { color: colors.textPrimary }]}>Copy elite traders</Text>
+          <Text style={[styles.heroTitle, { color: colors.textPrimary }]}>MAM Trading — Follow Global Elite Traders</Text>
           <Text style={[styles.heroSub, { color: colors.textSecondary }]}>
-            Leaderboard, managed accounts, and your provider dashboard — same as web.
+            Follow top performers and replicate their strategies automatically. For pooled accounts, use the PAMM tab.
           </Text>
         </View>
 
@@ -970,111 +998,255 @@ export default function SocialScreen({ navigation }) {
               ) : !dash ? (
                 <View style={styles.emptyBox}>
                   <Ionicons name="stats-chart-outline" size={48} color={colors.textMuted} />
-                  <Text style={[styles.emptyTitle, { color: colors.textSecondary }]}>{dashError || 'No provider profile'}</Text>
+                  <Text style={[styles.emptyTitle, { color: colors.textSecondary }]}>{dashError || 'You are not an approved MAM master. Apply in the "Become MAM Master" tab.'}</Text>
                   <TouchableOpacity onPress={() => setTab('provider')} style={{ marginTop: 12 }}>
-                    <Text style={{ color: accent, fontWeight: '600' }}>Become a provider →</Text>
+                    <Text style={{ color: accent, fontWeight: '600' }}>Become MAM Master →</Text>
                   </TouchableOpacity>
                 </View>
               ) : (
                 <>
-                  <View style={[styles.dashCard, cardBorder]}>
-                    <View style={[styles.dashRow, { borderBottomColor: colors.border }]}>
-                      <Text style={{ color: colors.textMuted }}>Status</Text>
-                      <Text style={{ color: colors.textPrimary, fontWeight: '700' }}>{dash.status}</Text>
+                  {/* Master badge + name header */}
+                  <View style={styles.dashHeader}>
+                    <View style={[styles.dashAvatar, { backgroundColor: accentMutedLight, borderColor: accent }]}>
+                      <Text style={[styles.dashAvatarTxt, { color: accent }]}>M</Text>
                     </View>
-                    <View style={[styles.dashRow, { borderBottomColor: colors.border }]}>
-                      <Text style={{ color: colors.textMuted }}>Type</Text>
-                      <Text style={{ color: colors.textPrimary }}>{dash.master_type}</Text>
-                    </View>
-                    <View style={[styles.dashRow, { borderBottomColor: colors.border }]}>
-                      <Text style={{ color: colors.textMuted }}>Total AUM</Text>
-                      <Text style={{ color: colors.textPrimary }}>${Number(perfData?.total_aum ?? dash.total_aum ?? 0).toFixed(2)}</Text>
-                    </View>
-                    <View style={[styles.dashRow, { borderBottomColor: colors.border }]}>
-                      <Text style={{ color: colors.textMuted }}>Investors</Text>
-                      <Text style={{ color: colors.textPrimary }}>{perfData?.total_investors ?? dash.active_investors ?? 0}</Text>
-                    </View>
-                    <View style={[styles.dashRow, { borderBottomColor: colors.border }]}>
-                      <Text style={{ color: colors.textMuted }}>Fee earnings</Text>
-                      <Text style={{ color: colors.success }}>${Number(perfData?.fee_earnings ?? 0).toFixed(2)}</Text>
-                    </View>
-                    <View style={[styles.dashRow, { borderBottomColor: colors.border }]}>
-                      <Text style={{ color: colors.textMuted }}>Sharpe ratio</Text>
-                      <Text style={{ color: colors.textPrimary }}>{Number(perfData?.sharpe_ratio ?? 0).toFixed(2)}</Text>
-                    </View>
-                    <View style={[styles.dashRow, { borderBottomColor: colors.border }]}>
-                      <Text style={{ color: colors.textMuted }}>Max drawdown</Text>
-                      <Text style={{ color: colors.error }}>{Number(perfData?.max_drawdown_pct ?? dash.max_drawdown_pct ?? 0).toFixed(2)}%</Text>
-                    </View>
-                    <View style={[styles.dashRow, { borderBottomColor: colors.border, borderBottomWidth: 0 }]}>
-                      <Text style={{ color: colors.textMuted }}>Total return %</Text>
-                      <Text style={{ color: (perfData?.total_return_pct ?? dash.total_return_pct ?? 0) >= 0 ? colors.success : colors.error }}>
-                        {(perfData?.total_return_pct ?? dash.total_return_pct ?? 0) >= 0 ? '+' : ''}
-                        {Number(perfData?.total_return_pct ?? dash.total_return_pct ?? 0).toFixed(2)}%
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <Text style={[styles.dashHeaderTitle, { color: colors.textPrimary }]}>Master Dashboard</Text>
+                        <View style={[styles.dashBadge, { backgroundColor: accentMutedLight, borderColor: accent }]}>
+                          <Text style={[styles.dashBadgeTxt, { color: accent }]}>MASTER</Text>
+                        </View>
+                      </View>
+                      <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>
+                        {dash.master_type === 'signal_provider' ? 'Signal Provider' : (dash.master_type || '').toUpperCase()}
+                        {dash.created_at ? ` · Since ${new Date(dash.created_at).toLocaleDateString()}` : ''}
                       </Text>
                     </View>
                   </View>
 
-                  {Array.isArray(perfData?.monthly_breakdown) && perfData.monthly_breakdown.length > 0 && (
-                    <View style={[styles.dashCard, cardBorder, { marginTop: 12 }]}>
-                      <Text style={{ color: colors.textPrimary, fontWeight: '700', fontSize: 13, marginBottom: 12 }}>
-                        Monthly performance
+                  {/* Key Stats Row */}
+                  <View style={styles.statsGrid2}>
+                    <View style={[styles.statBox2, cardBorder]}>
+                      <Text style={[styles.statBox2Lbl, { color: colors.textMuted }]}>Followers</Text>
+                      <Text style={[styles.statBox2Val, { color: colors.success }]}>{dash.followers_count || 0}</Text>
+                    </View>
+                    <View style={[styles.statBox2, cardBorder]}>
+                      <Text style={[styles.statBox2Lbl, { color: colors.textMuted }]}>Active Investors</Text>
+                      <Text style={[styles.statBox2Val, { color: colors.textPrimary }]}>
+                        {dash.active_investors || 0}
+                        <Text style={{ color: colors.textMuted, fontSize: 14, fontWeight: '400' }}> / {dash.max_investors || 0}</Text>
                       </Text>
-                      {(() => {
-                        const maxAbs = Math.max(...perfData.monthly_breakdown.map((m) => Math.abs(m.profit || 0)), 1);
-                        return perfData.monthly_breakdown.map((m, i) => {
-                          const pct = (Math.abs(m.profit || 0) / maxAbs) * 100;
-                          const positive = (m.profit || 0) >= 0;
-                          return (
-                            <View key={i} style={{ marginBottom: 10 }}>
-                              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                                <Text style={{ color: colors.textMuted, fontSize: 11 }}>{m.month}</Text>
-                                <Text style={{ color: positive ? colors.success : colors.error, fontSize: 11, fontWeight: '700' }}>
-                                  {positive ? '+' : ''}${Number(m.profit || 0).toFixed(2)}
-                                </Text>
+                    </View>
+                    <View style={[styles.statBox2, cardBorder]}>
+                      <Text style={[styles.statBox2Lbl, { color: colors.textMuted }]}>Total AUM</Text>
+                      <Text style={[styles.statBox2Val, { color: colors.success }]}>${fmtMoney(dash.total_aum)}</Text>
+                    </View>
+                    <View style={[styles.statBox2, cardBorder]}>
+                      <Text style={[styles.statBox2Lbl, { color: colors.textMuted }]}>Open Positions</Text>
+                      <Text style={[styles.statBox2Val, { color: colors.textPrimary }]}>{dash.open_positions || 0}</Text>
+                    </View>
+                  </View>
+
+                  {/* Earnings & Profit Sharing */}
+                  <View style={[styles.sectionCard, cardBorder]}>
+                    <View style={[styles.sectionHead, { borderBottomColor: colors.border }]}>
+                      <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>Earnings & Profit Sharing</Text>
+                      <Text style={[styles.sectionHint2, { color: colors.textMuted }]}>Commission earned from your followers' performance fees</Text>
+                    </View>
+                    <View style={styles.sectionGrid}>
+                      <View style={styles.sectionCell}>
+                        <Text style={[styles.cellLbl, { color: colors.textMuted }]}>Commission Earned</Text>
+                        <Text style={[styles.cellVal, { color: colors.warning || '#eab308' }]}>${fmtMoney(dash.commission_earned)}</Text>
+                      </View>
+                      <View style={styles.sectionCell}>
+                        <Text style={[styles.cellLbl, { color: colors.textMuted }]}>Performance Fee Rate</Text>
+                        <Text style={[styles.cellVal, { color: colors.textPrimary }]}>{Number(dash.performance_fee_pct || 0)}%</Text>
+                      </View>
+                      <View style={styles.sectionCell}>
+                        <Text style={[styles.cellLbl, { color: colors.textMuted }]}>Followers' Total Profit</Text>
+                        <Text style={[styles.cellVal, { color: (dash.total_investor_profit || 0) >= 0 ? colors.success : colors.error }]}>
+                          ${fmtMoney(dash.total_investor_profit)}
+                        </Text>
+                      </View>
+                      <View style={styles.sectionCell}>
+                        <Text style={[styles.cellLbl, { color: colors.textMuted }]}>Management Fee</Text>
+                        <Text style={[styles.cellVal, { color: colors.textPrimary }]}>{Number(dash.management_fee_pct || 0)}%</Text>
+                      </View>
+                    </View>
+                  </View>
+
+                  {/* Trading Activity */}
+                  <View style={[styles.sectionCard, cardBorder]}>
+                    <View style={[styles.sectionHead, { borderBottomColor: colors.border }]}>
+                      <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>Trading Activity</Text>
+                    </View>
+                    <View style={styles.sectionGrid}>
+                      <View style={styles.sectionCell}>
+                        <Text style={[styles.cellLbl, { color: colors.textMuted }]}>Today's Trades</Text>
+                        <Text style={[styles.cellVal, { color: colors.textPrimary }]}>{dash.today_trades || 0}</Text>
+                      </View>
+                      <View style={styles.sectionCell}>
+                        <Text style={[styles.cellLbl, { color: colors.textMuted }]}>Today's Profit</Text>
+                        <Text style={[styles.cellVal, { color: (dash.today_profit || 0) >= 0 ? colors.success : colors.error }]}>
+                          {(dash.today_profit || 0) >= 0 ? '+' : ''}${fmtMoney(dash.today_profit)}
+                        </Text>
+                      </View>
+                      <View style={styles.sectionCell}>
+                        <Text style={[styles.cellLbl, { color: colors.textMuted }]}>Total Trades</Text>
+                        <Text style={[styles.cellVal, { color: colors.textPrimary }]}>{dash.total_trades || 0}</Text>
+                      </View>
+                      <View style={styles.sectionCell}>
+                        <Text style={[styles.cellLbl, { color: colors.textMuted }]}>Win Rate</Text>
+                        <Text style={[styles.cellVal, { color: (dash.win_rate || 0) >= 50 ? colors.success : colors.error }]}>
+                          {Number(dash.win_rate || 0).toFixed(1)}%
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+
+                  {/* Performance Stats */}
+                  <View style={[styles.sectionCard, cardBorder]}>
+                    <View style={[styles.sectionHead, { borderBottomColor: colors.border }]}>
+                      <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>Performance Stats</Text>
+                    </View>
+                    <View style={styles.sectionGrid}>
+                      <View style={styles.sectionCell}>
+                        <Text style={[styles.cellLbl, { color: colors.textMuted }]}>Total Return</Text>
+                        <Text style={[styles.cellVal, { color: (dash.total_return_pct || 0) >= 0 ? colors.success : colors.error }]}>
+                          {(dash.total_return_pct || 0) >= 0 ? '+' : ''}{Number(dash.total_return_pct || 0).toFixed(2)}%
+                        </Text>
+                      </View>
+                      <View style={styles.sectionCell}>
+                        <Text style={[styles.cellLbl, { color: colors.textMuted }]}>Max Drawdown</Text>
+                        <Text style={[styles.cellVal, { color: colors.error }]}>{Number(dash.max_drawdown_pct || 0).toFixed(2)}%</Text>
+                      </View>
+                      <View style={styles.sectionCell}>
+                        <Text style={[styles.cellLbl, { color: colors.textMuted }]}>Sharpe Ratio</Text>
+                        <Text style={[styles.cellVal, { color: colors.textPrimary }]}>{Number(dash.sharpe_ratio || 0).toFixed(2)}</Text>
+                      </View>
+                      <View style={styles.sectionCell}>
+                        <Text style={[styles.cellLbl, { color: colors.textMuted }]}>Total Profit</Text>
+                        <Text style={[styles.cellVal, { color: (dash.total_profit || 0) >= 0 ? colors.success : colors.error }]}>
+                          ${fmtMoney(dash.total_profit)}
+                        </Text>
+                      </View>
+                      <View style={styles.sectionCell}>
+                        <Text style={[styles.cellLbl, { color: colors.textMuted }]}>Min Investment</Text>
+                        <Text style={[styles.cellVal, { color: colors.textPrimary }]}>${fmtMoney(dash.min_investment)}</Text>
+                      </View>
+                      <View style={styles.sectionCell}>
+                        <Text style={[styles.cellLbl, { color: colors.textMuted }]}>Status</Text>
+                        <Text style={[styles.cellVal, { color: colors.success, textTransform: 'capitalize' }]}>{dash.status}</Text>
+                      </View>
+                    </View>
+                  </View>
+
+                  {/* Monthly Performance Chart */}
+                  {Array.isArray(perfData?.monthly_breakdown) && perfData.monthly_breakdown.length > 0 && (
+                    <View style={[styles.sectionCard, cardBorder]}>
+                      <View style={[styles.sectionHead, { borderBottomColor: colors.border }]}>
+                        <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>Monthly Performance</Text>
+                      </View>
+                      <View style={{ padding: 16 }}>
+                        {(() => {
+                          const maxAbs = Math.max(...perfData.monthly_breakdown.map((m) => Math.abs(m.profit || 0)), 1);
+                          return perfData.monthly_breakdown.map((m, i) => {
+                            const pct = (Math.abs(m.profit || 0) / maxAbs) * 100;
+                            const positive = (m.profit || 0) >= 0;
+                            return (
+                              <View key={i} style={{ marginBottom: 10 }}>
+                                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                                  <Text style={{ color: colors.textMuted, fontSize: 11 }}>{m.month}</Text>
+                                  <Text style={{ color: positive ? colors.success : colors.error, fontSize: 11, fontWeight: '700' }}>
+                                    {positive ? '+' : ''}${Number(m.profit || 0).toFixed(2)}
+                                  </Text>
+                                </View>
+                                <View style={{ height: 6, backgroundColor: colors.bgSecondary, borderRadius: 3, overflow: 'hidden' }}>
+                                  <View
+                                    style={{
+                                      width: `${pct}%`,
+                                      height: '100%',
+                                      backgroundColor: positive ? colors.success : colors.error,
+                                      borderRadius: 3,
+                                    }}
+                                  />
+                                </View>
                               </View>
-                              <View style={{ height: 6, backgroundColor: colors.bgSecondary, borderRadius: 3, overflow: 'hidden' }}>
-                                <View
-                                  style={{
-                                    width: `${pct}%`,
-                                    height: '100%',
-                                    backgroundColor: positive ? colors.success : colors.error,
-                                    borderRadius: 3,
-                                  }}
-                                />
-                              </View>
-                            </View>
-                          );
-                        });
-                      })()}
+                            );
+                          });
+                        })()}
+                      </View>
                     </View>
                   )}
 
-                  {investorsList.length > 0 && (
-                    <View style={[styles.dashCard, cardBorder, { marginTop: 12 }]}>
-                      <Text style={{ color: colors.textPrimary, fontWeight: '700', fontSize: 13, marginBottom: 8 }}>
-                        Investors ({investorsList.length})
-                      </Text>
-                      {investorsList.map((inv, i) => (
-                        <View
-                          key={inv.id || i}
-                          style={[styles.dashRow, { borderBottomColor: colors.border, borderBottomWidth: i === investorsList.length - 1 ? 0 : StyleSheet.hairlineWidth }]}
-                        >
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ color: colors.textPrimary, fontSize: 13, fontWeight: '600' }}>
-                              {inv.user_name || inv.user_email || 'Investor'}
-                            </Text>
-                            <Text style={{ color: colors.textMuted, fontSize: 10, marginTop: 2 }}>
-                              ${Number(inv.allocated || 0).toFixed(2)} · {Number(inv.share_pct || 0).toFixed(1)}% share
-                            </Text>
-                          </View>
-                          <Text style={{ color: (inv.pnl || 0) >= 0 ? colors.success : colors.error, fontSize: 12, fontWeight: '700' }}>
-                            {(inv.pnl || 0) >= 0 ? '+' : ''}${Number(inv.pnl || 0).toFixed(2)}
-                          </Text>
-                        </View>
-                      ))}
+                  {/* My Followers */}
+                  <View style={[styles.sectionCard, cardBorder]}>
+                    <View style={[styles.sectionHead, { borderBottomColor: colors.border, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>My Followers</Text>
+                        <Text style={[styles.sectionHint2, { color: colors.textMuted }]}>Users currently following your trades</Text>
+                      </View>
+                      <TouchableOpacity
+                        onPress={fetchFollowers}
+                        disabled={followersLoading}
+                        style={[styles.refreshBtn, { borderColor: accent }]}
+                      >
+                        <Text style={{ color: accent, fontWeight: '700', fontSize: 12 }}>
+                          {followersLoading ? '...' : 'Refresh'}
+                        </Text>
+                      </TouchableOpacity>
                     </View>
-                  )}
+                    <View style={{ padding: 16 }}>
+                      {followersLoading ? (
+                        <ActivityIndicator color={accent} style={{ marginVertical: 12 }} />
+                      ) : followersList.length === 0 ? (
+                        <Text style={{ color: colors.textMuted, fontSize: 13, textAlign: 'center', paddingVertical: 16 }}>
+                          No followers yet
+                        </Text>
+                      ) : (
+                        followersList.map((f, i) => (
+                          <View
+                            key={f.id || i}
+                            style={[styles.followerRow, { borderBottomColor: colors.border, borderBottomWidth: i === followersList.length - 1 ? 0 : StyleSheet.hairlineWidth }]}
+                          >
+                            <View style={{ flex: 1, minWidth: 0 }}>
+                              <Text style={{ color: colors.textPrimary, fontSize: 13, fontWeight: '600' }} numberOfLines={1}>
+                                {f.user_name || 'Follower'}
+                              </Text>
+                              {f.user_email ? (
+                                <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }} numberOfLines={1}>{f.user_email}</Text>
+                              ) : null}
+                              {f.account_number ? (
+                                <Text style={{ color: accent, fontSize: 10, marginTop: 2, fontFamily: 'monospace' }}>{f.account_number}</Text>
+                              ) : null}
+                            </View>
+                            <View style={{ alignItems: 'flex-end' }}>
+                              <Text style={{ color: colors.textPrimary, fontSize: 12, fontWeight: '700' }}>
+                                ${Number(f.allocation_amount || 0).toFixed(2)}
+                              </Text>
+                              <Text style={{
+                                color: (f.total_profit || 0) >= 0 ? colors.success : colors.error,
+                                fontSize: 11,
+                                fontWeight: '700',
+                                marginTop: 2,
+                              }}>
+                                {(f.total_profit || 0) >= 0 ? '+' : ''}${Number(f.total_profit || 0).toFixed(2)}
+                              </Text>
+                              {f.profit_pct != null && (
+                                <Text style={{
+                                  color: (f.profit_pct || 0) >= 0 ? colors.success : colors.error,
+                                  fontSize: 10,
+                                  marginTop: 1,
+                                }}>
+                                  {(f.profit_pct || 0) >= 0 ? '+' : ''}{Number(f.profit_pct).toFixed(2)}%
+                                </Text>
+                              )}
+                            </View>
+                          </View>
+                        ))
+                      )}
+                    </View>
+                  </View>
                 </>
               )}
             </>
@@ -1353,6 +1525,26 @@ const styles = StyleSheet.create({
   dashRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
   dashGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   kv: { width: Math.min(120, (SCREEN_W - 64) / 3), borderRadius: 8, padding: 8 },
+  dashHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+  dashAvatar: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
+  dashAvatarTxt: { fontSize: 22, fontWeight: '800' },
+  dashHeaderTitle: { fontSize: 18, fontWeight: '800' },
+  dashBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, borderWidth: 1 },
+  dashBadgeTxt: { fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+  statsGrid2: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 14 },
+  statBox2: { flexBasis: '47%', flexGrow: 1, borderRadius: 14, borderWidth: 1, padding: 14 },
+  statBox2Lbl: { fontSize: 11, marginBottom: 6 },
+  statBox2Val: { fontSize: 22, fontWeight: '800' },
+  sectionCard: { borderRadius: 14, borderWidth: 1, marginBottom: 12, overflow: 'hidden' },
+  sectionHead: { paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  sectionTitle: { fontSize: 14, fontWeight: '700' },
+  sectionHint2: { fontSize: 11, marginTop: 2 },
+  sectionGrid: { flexDirection: 'row', flexWrap: 'wrap', padding: 12 },
+  sectionCell: { width: '50%', padding: 6 },
+  cellLbl: { fontSize: 10, marginBottom: 4 },
+  cellVal: { fontSize: 16, fontWeight: '700' },
+  refreshBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, borderWidth: 1.5 },
+  followerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, gap: 12 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
   modalSheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '88%' },
   modalHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
