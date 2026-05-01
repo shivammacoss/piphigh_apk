@@ -22,6 +22,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { API_URL } from '../config';
 import { useTheme } from '../context/ThemeContext';
+import { authedFetch } from '../utils/authedFetch';
 
 const WalletScreen = ({ navigation }) => {
   const { colors, isDark } = useTheme();
@@ -92,21 +93,13 @@ const WalletScreen = ({ navigation }) => {
 
   const fetchWalletData = async () => {
     try {
-      const token = await SecureStore.getItemAsync('token');
-      if (!token) {
-        setRefreshing(false);
-        return;
-      }
-
-      const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
-
       const [walletRes, transRes] = await Promise.all([
-        fetch(`${API_URL}/wallet/summary`, { headers }),
-        fetch(`${API_URL}/wallet/transactions`, { headers }),
+        authedFetch('/wallet/summary'),
+        authedFetch('/wallet/transactions'),
       ]);
 
       if (walletRes.status === 401 || walletRes.status === 403) {
-        console.log('[Wallet] Token rejected, will retry on next refresh');
+        console.log('[Wallet] Token rejected even after silent re-login attempt');
         return;
       }
 

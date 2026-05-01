@@ -15,6 +15,7 @@ import { useNavigation } from '@react-navigation/native';
 import * as SecureStore from 'expo-secure-store';
 import { API_URL } from '../config';
 import { useTheme } from '../context/ThemeContext';
+import { authedFetch } from '../utils/authedFetch';
 
 const fmt = (n, currency = 'USD') => {
   const num = Number(n) || 0;
@@ -35,19 +36,6 @@ const accountLabelFor = (row) => {
   if (n.startsWith('CF')) return 'Copy Trade Account';
   if (n.startsWith('IF')) return 'Investment Account';
   return 'Live Account';
-};
-
-const authedFetch = async (path, options = {}) => {
-  const token = await SecureStore.getItemAsync('token');
-  const res = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token && { Authorization: `Bearer ${token}` }),
-      ...(options.headers || {}),
-    },
-  });
-  return res;
 };
 
 const DashboardScreen = () => {
@@ -108,7 +96,10 @@ const DashboardScreen = () => {
     try {
       const res = await authedFetch('/accounts');
       if (res.status === 401 || res.status === 403) {
-        navigation.navigate('Login');
+        // Silent re-login already attempted inside authedFetch — only here if
+        // re-login itself failed (no stored creds or backend rejected). Skip
+        // redirect so the user can retry instead of being kicked out on a
+        // transient network blip.
         return;
       }
       const data = await res.json();

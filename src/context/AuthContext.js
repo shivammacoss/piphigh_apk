@@ -51,6 +51,9 @@ export const AuthProvider = ({ children }) => {
         
         await SecureStore.setItemAsync('token', data.access_token);
         await SecureStore.setItemAsync('user', JSON.stringify(userInfo));
+        // Persist credentials for silent token refresh on expiry.
+        await SecureStore.setItemAsync('savedEmail', email);
+        await SecureStore.setItemAsync('savedPassword', password);
         setToken(data.access_token);
         setUser(userInfo);
         return { success: true };
@@ -86,6 +89,10 @@ export const AuthProvider = ({ children }) => {
         
         await SecureStore.setItemAsync('token', data.access_token);
         await SecureStore.setItemAsync('user', JSON.stringify(userInfo));
+        if (userData?.email && userData?.password) {
+          await SecureStore.setItemAsync('savedEmail', userData.email);
+          await SecureStore.setItemAsync('savedPassword', userData.password);
+        }
         setToken(data.access_token);
         setUser(userInfo);
         return { success: true };
@@ -102,6 +109,8 @@ export const AuthProvider = ({ children }) => {
     try {
       await SecureStore.deleteItemAsync('token');
       await SecureStore.deleteItemAsync('user');
+      await SecureStore.deleteItemAsync('savedEmail');
+      await SecureStore.deleteItemAsync('savedPassword');
       setToken(null);
       setUser(null);
     } catch (error) {

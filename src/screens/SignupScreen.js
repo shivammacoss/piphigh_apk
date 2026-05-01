@@ -106,6 +106,11 @@ const SignupScreen = ({ navigation }) => {
           expires_at: data.expires_at,
         };
         await SecureStore.setItemAsync('user', JSON.stringify(userInfo));
+        // Persist credentials for silent token refresh on expiry.
+        await SecureStore.setItemAsync('savedEmail', formData.email.trim().toLowerCase());
+        if (formData.password) {
+          await SecureStore.setItemAsync('savedPassword', formData.password);
+        }
         navigation.replace('MainTrading');
       } else {
         Alert.alert(

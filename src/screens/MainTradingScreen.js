@@ -34,6 +34,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useSettings } from '../context/SettingsContext';
 import socketService from '../services/socketService';
 import { getJsonAuthHeaders } from '../utils/authHeaders';
+import { authedFetch } from '../utils/authedFetch';
 import {
   extractInstrumentRows,
   extractPriceRows,
@@ -1399,22 +1400,10 @@ const TradingProvider = ({ children, navigation, route }) => {
   const fetchAccounts = async (userId, forceSelectFirst = false) => {
     try {
       console.log('[TrustEdge] Fetching accounts from backend');
-      const token = await SecureStore.getItemAsync('token');
-      
-      if (!token) {
-        console.log('[TrustEdge] No token found');
-        return;
-      }
-
-      const res = await fetch(`${API_URL}/accounts`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      const res = await authedFetch('/accounts');
 
       if (res.status === 401 || res.status === 403) {
-        console.log('[TrustEdge] Token rejected (401/403), will retry on next refresh');
+        console.log('[TrustEdge] Token rejected even after silent re-login attempt');
         return;
       }
 
@@ -1469,21 +1458,8 @@ const TradingProvider = ({ children, navigation, route }) => {
       return;
     }
     try {
-      const token = await SecureStore.getItemAsync('token');
-      console.log('[TrustEdge] Token available for open trades:', !!token);
       console.log('[TrustEdge] Account ID for open trades:', accountId);
-      
-      if (!token) {
-        console.log('[TrustEdge] No token - skipping open trades fetch');
-        return;
-      }
-      
-      const res = await fetch(`${API_URL}/positions/?account_id=${accountId}&status=open`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      const res = await authedFetch(`/positions/?account_id=${accountId}&status=open`);
       const data = await res.json();
       console.log('[TrustEdge] Open positions response:', data);
       // Map backend snake_case to camelCase expected by UI
@@ -1521,20 +1497,7 @@ const TradingProvider = ({ children, navigation, route }) => {
       return;
     }
     try {
-      const token = await SecureStore.getItemAsync('token');
-      console.log('[TrustEdge] Token available for pending orders:', !!token);
-      
-      if (!token) {
-        console.log('[TrustEdge] No token - skipping pending orders fetch');
-        return;
-      }
-      
-      const res = await fetch(`${API_URL}/orders/?account_id=${accountId}&status=pending`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      const res = await authedFetch(`/orders/?account_id=${accountId}&status=pending`);
       const data = await res.json();
       console.log('[TrustEdge] Pending orders response:', data);
       // Map backend snake_case to camelCase expected by UI
@@ -1567,21 +1530,8 @@ const TradingProvider = ({ children, navigation, route }) => {
       return;
     }
     try {
-      const token = await SecureStore.getItemAsync('token');
-      console.log('[TrustEdge] Token available for trade history:', !!token);
-      
-      if (!token) {
-        console.log('[TrustEdge] No token - skipping trade history fetch');
-        return;
-      }
-      
       // Use /portfolio/trades for proper trade history with close_price and profit
-      const res = await fetch(`${API_URL}/portfolio/trades?account_id=${accountId}&per_page=200`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      const res = await authedFetch(`/portfolio/trades?account_id=${accountId}&per_page=200`);
       const data = await res.json();
       console.log('[TrustEdge] Trade history response:', data);
       
@@ -1639,19 +1589,8 @@ const TradingProvider = ({ children, navigation, route }) => {
     }
     
     try {
-      const token = await SecureStore.getItemAsync('token');
-      if (!token) {
-        console.log('[TrustEdge] No token for fetchAccountSummary');
-        return;
-      }
-      
-      const res = await fetch(`${API_URL}/accounts/${accountId}/summary`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      
+      const res = await authedFetch(`/accounts/${accountId}/summary`);
+
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         console.log('[TrustEdge] Account summary fetch failed:', res.status, errData?.detail || errData);
@@ -6069,10 +6008,15 @@ const ChartTab = ({ route }) => {
   const newsUrl = `https://www.tradingview.com/embed-widget/timeline/?locale=en&feedMode=symbol&symbol=${encodedSymbol}&colorTheme=${chartTheme}&isTransparent=true&displayMode=regular&width=100%25&height=100%25`;
 
   return (
-    <View style={[styles.chartContainer, { backgroundColor: colors.bgPrimary, paddingTop: insets.top }]}>
+    <View style={[styles.chartContainer, { backgroundColor: colors.bgPrimary }]}>
+      {/* Status-bar spacer — keeps network/battery icons cleanly visible on a
+          neutral background so the red/green trading bar (or chart tabs) below
+          never overlaps the system status bar. */}
+      <View style={{ height: insets.top, backgroundColor: colors.bgPrimary }} />
+
       {/* Quick Trade Bar at TOP - SELL | lot | BUY (toggle in More → "Chart Quick Trade") */}
       {showChartQuickTrade && (
-      <View style={[styles.quickTradeBarTop, { backgroundColor: colors.bgCard, borderBottomColor: colors.border, zIndex: 10, elevation: Platform.OS === 'android' ? 8 : 0 }]}>
+      <View style={[styles.quickTradeBarTop, { paddingTop: 0, backgroundColor: colors.bgCard, borderBottomColor: colors.border, zIndex: 10, elevation: Platform.OS === 'android' ? 8 : 0 }]}>
         {/* SELL Button with Price */}
         <TouchableOpacity
           style={[styles.sellPriceBtn, isExecuting && styles.btnDisabled]}
@@ -6130,8 +6074,8 @@ const ChartTab = ({ route }) => {
       </View>
       )}
 
-      {/* Chart Tabs + NEWS tab */}
-      <View style={[styles.chartTabsBar, { backgroundColor: colors.bgSecondary, borderBottomColor: colors.border }]}>
+      {/* Chart Tabs + NEWS tab — sits cleanly below the status-bar spacer. */}
+      <View style={[styles.chartTabsBar, { paddingTop: 4, backgroundColor: colors.bgSecondary, borderBottomColor: colors.border }]}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chartTabsScroll}>
           {chartTabs.map(tab => (
             <TouchableOpacity
@@ -7771,7 +7715,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#1E1E1E',
     borderBottomWidth: 1,
     borderBottomColor: '#333333',
-    paddingTop: 44,
   },
   sellPriceBtn: { 
     flex: 1,

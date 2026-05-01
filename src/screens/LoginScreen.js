@@ -112,6 +112,10 @@ const LoginScreen = ({ navigation }) => {
         role: data.role,
         expires_at: data.expires_at,
       }));
+      // Persist credentials so the app can silently re-issue an access token
+      // when the JWT expires (keeps the user logged in indefinitely).
+      await SecureStore.setItemAsync('savedEmail', email);
+      await SecureStore.setItemAsync('savedPassword', password);
 
       navigation.replace('MainTrading');
     } catch (error) {
