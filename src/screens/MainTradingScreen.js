@@ -5903,61 +5903,57 @@ const ChartTab = ({ route }) => {
   }, [ctx.selectedAccount, ctx.selectedChallengeAccount, ctx.isChallengeMode]);
 
   const chartHtml = useMemo(() => {
-    const config = {
-      symbol: activeSymbol,
-      isDark,
-      decimals,
-      interval: '5',
-      token: chartJwt,
-      apiUrl: API_URL,
-      wsUrl: WS_URL,
-      account: accountForChart,
-      // Send a slim copy of the instruments list — datafeed.searchSymbols/resolveSymbol use it.
-      instruments: (Array.isArray(ctx.instruments) ? ctx.instruments : []).map((i) => ({
-        symbol: i.symbol,
-        display_name: i.display_name || i.name,
-        segment: i.category || i.segment,
-        digits: i.digits || i.precision,
-      })),
-    };
+    const tvSym = getSymbolForTradingView(activeSymbol);
     return `<!DOCTYPE html>
 <html><head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<style>
-  *{margin:0;padding:0;box-sizing:border-box;}
-  html,body{height:100%;width:100%;background:${chartBg};overflow:hidden;font-family:-apple-system,Segoe UI,Roboto,sans-serif;}
-  #tv_chart{position:absolute;inset:0;}
-  #status{position:absolute;inset:0;display:none;align-items:center;justify-content:center;color:${isDark ? '#bbb' : '#444'};font-size:13px;text-align:center;padding:0 24px;background:${chartBg};z-index:5;}
-  ${!isDark ? `
-  /* Light-theme overrides for TradingView popup menus (resolution / interval picker, etc.) */
-  :root,body{
-    --tv-color-popup-element-background-active:#F1F5F9 !important;
-    --tv-color-popup-element-background-hover:#F1F5F9 !important;
-    --tv-color-popup-element-text-active:#0F172A !important;
-    --tv-color-popup-element-text:#0F172A !important;
-    --tv-color-popup-element-text-hover:#0F172A !important;
-    --tv-color-popup-element-divider-background:#E5E7EB !important;
-    --tv-color-popup-background:#FFFFFF !important;
-    --tv-color-popup-element-secondary-text:#64748B !important;
-    --tv-color-platform-background:#F1F5F9 !important;
-    --tv-color-toolbar-button-background-hover:#F1F5F9 !important;
-    --tv-color-toolbar-button-background-active:#F1F5F9 !important;
-    --tv-color-toolbar-button-background-active-hover:#E2E8F0 !important;
-    --tv-color-toolbar-button-text:#0F172A !important;
-    --tv-color-toolbar-button-text-hover:#0F172A !important;
-    --tv-color-toolbar-button-text-active:#1a73e8 !important;
-    --tv-color-toolbar-button-text-active-hover:#1a73e8 !important;
-  }
-  ` : ''}
-</style>
+<style>*{margin:0;padding:0;box-sizing:border-box;}html,body{height:100%;width:100%;background:${chartBg};overflow:hidden;}</style>
 </head><body>
-<div id="tv_chart"></div>
-<div id="status">Loading chart…</div>
-<script>window.PIPHIGH_CONFIG=${JSON.stringify(config)};</script>
-<script src="/charting_library/charting_library.standalone.js"></script>
-<script>${CHART_BOOTSTRAP_JS}</script>
+<div class="tradingview-widget-container" style="height:100%;width:100%">
+  <div id="tradingview_chart" style="height:100%;width:100%"></div>
+</div>
+<script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+<script type="text/javascript">
+new TradingView.widget({
+  "autosize": true,
+  "symbol": "${tvSym}",
+  "interval": "5",
+  "timezone": "Etc/UTC",
+  "theme": "${chartTheme}",
+  "style": "1",
+  "locale": "en",
+  "toolbar_bg": "${chartBg}",
+  "enable_publishing": false,
+  "hide_top_toolbar": false,
+  "hide_legend": false,
+  "hide_side_toolbar": false,
+  "save_image": false,
+  "container_id": "tradingview_chart",
+  "backgroundColor": "${chartBg}",
+  "withdateranges": true,
+  "allow_symbol_change": false,
+  "details": true,
+  "hotlist": false,
+  "calendar": false,
+  "show_popup_button": true,
+  "popup_width": "1000",
+  "popup_height": "650",
+  "studies": [],
+  "studies_overrides": {},
+  "overrides": {
+    "mainSeriesProperties.showPriceLine": true,
+    "mainSeriesProperties.highLowAvgPrice.highLowPriceLinesVisible": true,
+    "scalesProperties.showSeriesLastValue": true,
+    "scalesProperties.showStudyLastValue": true,
+    "paneProperties.legendProperties.showLegend": true,
+    "paneProperties.legendProperties.showSeriesTitle": true,
+    "paneProperties.legendProperties.showSeriesOHLC": true,
+    "paneProperties.legendProperties.showBarChange": true
+  }
+});
+</script>
 </body></html>`;
-  }, [activeSymbol, isDark, decimals, chartJwt, accountForChart, ctx.instruments, chartBg]);
+  }, [activeSymbol, isDark, chartBg, chartTheme]);
 
   // Push position + order updates into the chart WebView (no remount).
   useEffect(() => {
@@ -6159,12 +6155,11 @@ const ChartTab = ({ route }) => {
         </View>
       ) : (
         <View style={[styles.chartWrapper, { zIndex: 0 }]}>
-          {/* Single chart: TradingView Charting Library — drawing tools, indicators
-              and SL/TP/entry lines all in one (loaded from piphigh.com). */}
+          {/* Simple TradingView embed widget (tv.js) — public-data candles. */}
           <WebView
             ref={chartWebViewRef}
-            key={`tvcl-${activeSymbol}-${isDark}-${chartJwt ? 'a' : 'g'}`}
-            source={{ html: chartHtml, baseUrl: 'https://piphigh.com/' }}
+            key={`tv-${activeSymbol}-${isDark}`}
+            source={{ html: chartHtml }}
             style={{ flex: 1, backgroundColor: chartBg }}
             javaScriptEnabled={true}
             domStorageEnabled={true}
@@ -6173,7 +6168,6 @@ const ChartTab = ({ route }) => {
             mixedContentMode="always"
             allowsInlineMediaPlayback={true}
             androidLayerType="hardware"
-            onMessage={handleChartMessage}
           />
         </View>
       )}
