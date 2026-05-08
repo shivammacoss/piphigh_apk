@@ -16,6 +16,8 @@ import { Ionicons } from '@expo/vector-icons';
 import * as SecureStore from 'expo-secure-store';
 import { API_URL } from '../config';
 import { useTheme } from '../context/ThemeContext';
+import { authedFetch } from '../utils/authedFetch';
+import { isKycApproved, showKycGate, fetchKycStatus } from '../utils/kycGate';
 
 function isDemoAccount(a) {
   return !!(a?.is_demo || a?.isDemo || a?.accountTypeId?.isDemo);
@@ -53,6 +55,9 @@ const AccountsScreen = ({ navigation, route }) => {
     accountHolderName: '',
   });
   const [upiId, setUpiId] = useState('');
+
+  // KYC gate state — live trading accounts require approved KYC (matches web).
+  const [kycStatus, setKycStatus] = useState('none');
 
   // Account creation states (matches web /accounts/available-groups + POST /accounts/open)
   const [showOpenModal, setShowOpenModal] = useState(false);
@@ -109,6 +114,12 @@ const AccountsScreen = ({ navigation, route }) => {
 
   useEffect(() => {
     loadUser();
+    // Refresh the KYC status on every mount so the gate reflects the latest
+    // admin decision without forcing a full re-login.
+    (async () => {
+      const s = await fetchKycStatus();
+      setKycStatus(s);
+    })();
   }, []);
 
   useEffect(() => {
@@ -518,6 +529,14 @@ const AccountsScreen = ({ navigation, route }) => {
   };
 
   const openNewAccountModal = async () => {
+    // Always re-check KYC status here so the gate stays accurate even if the
+    // user lingered on this screen long enough for an admin decision to land.
+    const fresh = await fetchKycStatus();
+    setKycStatus(fresh);
+    if (!isKycApproved(fresh)) {
+      showKycGate(navigation, fresh);
+      return;
+    }
     setSelectedGroupId(null);
     setShowOpenModal(true);
     await fetchAccountGroups();

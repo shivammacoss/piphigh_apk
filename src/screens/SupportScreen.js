@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as SecureStore from 'expo-secure-store';
 import { API_URL } from '../config';
 import { useTheme } from '../context/ThemeContext';
+import { authedFetch } from '../utils/authedFetch';
 
 const SupportScreen = ({ navigation }) => {
   const { colors, isDark } = useTheme();
@@ -60,9 +61,12 @@ const SupportScreen = ({ navigation }) => {
 
   const fetchTickets = async () => {
     try {
-      const res = await fetch(`${API_URL}/support/user/${user._id}`);
-      const data = await res.json();
-      setTickets(data.tickets || []);
+      const res = await authedFetch('/support/tickets');
+      const data = await res.json().catch(() => ({}));
+      // Backend returns { items: [...], total, page, per_page }
+      const list = Array.isArray(data?.items) ? data.items : Array.isArray(data?.tickets) ? data.tickets : Array.isArray(data) ? data : [];
+      // Normalize id field so the rest of the UI can keep using `_id`.
+      setTickets(list.map((t) => ({ ...t, _id: t._id || t.id })));
     } catch (e) {
       console.error('Error fetching tickets:', e);
     }
@@ -77,22 +81,25 @@ const SupportScreen = ({ navigation }) => {
 
     setIsSubmitting(true);
     try {
-      const res = await fetch(`${API_URL}/support/create`, {
+      const res = await authedFetch('/support/tickets', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: user._id,
-          ...newTicket
-        })
+          subject: newTicket.subject,
+          message: newTicket.message,
+          priority: String(newTicket.priority || 'medium').toLowerCase(),
+        }),
       });
-      const data = await res.json();
-      if (data.success) {
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
         Alert.alert('Success', 'Support ticket created successfully');
         setShowNewTicketModal(false);
         setNewTicket({ subject: '', message: '', priority: 'MEDIUM' });
         fetchTickets();
       } else {
-        Alert.alert('Error', data.message || 'Failed to create ticket');
+        const msg = Array.isArray(data?.detail)
+          ? data.detail.map((e) => e.msg || JSON.stringify(e)).join('\n')
+          : data?.detail || data?.message || `Failed to create ticket (${res.status})`;
+        Alert.alert('Error', msg);
       }
     } catch (e) {
       Alert.alert('Error', 'Failed to create ticket');
@@ -108,21 +115,24 @@ const SupportScreen = ({ navigation }) => {
 
     setIsSubmitting(true);
     try {
-      const res = await fetch(`${API_URL}/support/reply/${selectedTicket._id}`, {
+      const ticketId = selectedTicket._id || selectedTicket.id;
+      const res = await authedFetch(`/support/tickets/${ticketId}/reply`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: replyMessage,
-          isAdmin: false,
-        })
+        body: JSON.stringify({ message: replyMessage }),
       });
-      const data = await res.json();
-      if (data.success) {
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
         setReplyMessage('');
-        setSelectedTicket(data.ticket);
+        // Refetch the ticket so the new reply shows up.
+        try {
+          const tRes = await authedFetch(`/support/tickets/${ticketId}`);
+          const tData = await tRes.json().catch(() => ({}));
+          if (tRes.ok) setSelectedTicket({ ...tData, _id: tData._id || tData.id });
+        } catch {}
         fetchTickets();
       } else {
-        Alert.alert('Error', data.message || 'Failed to send reply');
+        const msg = data?.detail || data?.message || `Failed to send reply (${res.status})`;
+        Alert.alert('Error', msg);
       }
     } catch (e) {
       Alert.alert('Error', 'Failed to send reply');

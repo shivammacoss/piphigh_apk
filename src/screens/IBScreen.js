@@ -301,13 +301,11 @@ const IBScreen = ({ navigation, route }) => {
               <Ionicons name="ribbon" size={48} color={colors.accent} />
             </View>
             <Text style={[styles.applyTitle, { color: colors.textPrimary }]}>Become an Introducing Broker</Text>
-            <Text style={[styles.applySubtitle, { color: colors.textMuted }]}>Earn commissions by referring traders. Get up to 5 levels of referral commissions!</Text>
-            
+
             <View style={[styles.benefitsCard, { backgroundColor: colors.bgCard, borderWidth: 1, borderColor: colors.border }]}>
               <Text style={[styles.benefitsTitle, { color: colors.textPrimary }]}>Benefits:</Text>
               {[
                 'Earn commission on every trade your referrals make',
-                'Multi-level commissions (up to 5 levels)',
                 'Real-time commission tracking',
                 'Easy withdrawal to your wallet'
               ].map((benefit, idx) => (

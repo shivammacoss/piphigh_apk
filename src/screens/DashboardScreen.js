@@ -16,6 +16,7 @@ import * as SecureStore from 'expo-secure-store';
 import { API_URL } from '../config';
 import { useTheme } from '../context/ThemeContext';
 import { authedFetch } from '../utils/authedFetch';
+import { isKycApproved, showKycGate } from '../utils/kycGate';
 
 const fmt = (n, currency = 'USD') => {
   const num = Number(n) || 0;
@@ -276,7 +277,13 @@ const DashboardScreen = () => {
   };
 
   const newAccount = () => {
-    navigation.navigate('Accounts');
+    // Mirror web: live trading accounts require approved KYC. Block here so
+    // the user can't even land on the picker, then show the gate dialog.
+    if (!isKycApproved(kycStatus)) {
+      showKycGate(navigation, kycStatus);
+      return;
+    }
+    navigation.navigate('Accounts', { action: 'open' });
   };
 
   // ── Render ─────────────────────────────────────────────────────

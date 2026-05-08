@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity,
+  View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Modal, FlatList,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
@@ -9,11 +9,21 @@ import useRiskCalculator from '../hooks/useRiskCalculator';
 import ScreenHeader from '../components/ui/ScreenHeader';
 import TabBar from '../components/ui/TabBar';
 
+// Tab keys must match the i18n keys under riskCalc.* (e.g. lotSizeCalc, not lotsizeCalc).
 const CALC_TABS = [
   { key: 'margin', icon: 'shield-outline' },
   { key: 'pnl', icon: 'trending-up-outline' },
-  { key: 'lotsize', icon: 'resize-outline' },
+  { key: 'lotSize', icon: 'resize-outline' },
   { key: 'swap', icon: 'swap-horizontal-outline' },
+];
+
+// Common symbols available in the picker — covers forex majors, metals,
+// indices and crypto so users can change the instrument used by all calcs.
+const INSTRUMENT_OPTIONS = [
+  { group: 'Forex', symbols: ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'NZDUSD', 'USDCAD', 'EURGBP', 'EURJPY', 'GBPJPY'] },
+  { group: 'Metals', symbols: ['XAUUSD', 'XAGUSD'] },
+  { group: 'Indices', symbols: ['US30', 'US100', 'US500', 'GER40', 'UK100', 'JPN225'] },
+  { group: 'Crypto', symbols: ['BTCUSD', 'ETHUSD', 'LTCUSD', 'XRPUSD', 'SOLUSD', 'BNBUSD', 'DOGEUSD', 'ADAUSD'] },
 ];
 
 function InputRow({ label, value, onChangeText, placeholder, colors, keyboardType = 'decimal-pad' }) {
@@ -63,8 +73,18 @@ export default function RiskCalculatorScreen({ navigation }) {
   const { t } = useI18n();
   const calc = useRiskCalculator();
   const [activeTab, setActiveTab] = useState('margin');
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerSearch, setPickerSearch] = useState('');
 
   const tabs = CALC_TABS.map(tb => ({ key: tb.key, label: t(`riskCalc.${tb.key}Calc`) }));
+
+  const filteredGroups = useMemo(() => {
+    const q = pickerSearch.trim().toUpperCase();
+    if (!q) return INSTRUMENT_OPTIONS;
+    return INSTRUMENT_OPTIONS
+      .map(g => ({ ...g, symbols: g.symbols.filter(s => s.includes(q)) }))
+      .filter(g => g.symbols.length > 0);
+  }, [pickerSearch]);
 
   const marginResult = useMemo(() => calc.calcMargin(), [calc.calcMargin]);
   const pnlResult = useMemo(() => calc.calcPnl(), [calc.calcPnl]);
@@ -77,11 +97,16 @@ export default function RiskCalculatorScreen({ navigation }) {
       <TabBar tabs={tabs} activeTab={activeTab} onTabPress={setActiveTab} scrollable />
 
       <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
-        {/* Instrument display */}
-        <View style={[s.instrumentBar, { backgroundColor: colors.bgCard, borderColor: colors.border }]}>
+        {/* Instrument selector — tap to change */}
+        <TouchableOpacity
+          activeOpacity={0.7}
+          style={[s.instrumentBar, { backgroundColor: colors.bgCard, borderColor: colors.border }]}
+          onPress={() => { setPickerSearch(''); setPickerOpen(true); }}
+        >
           <Ionicons name="bar-chart-outline" size={18} color={colors.primary} />
-          <Text style={[s.instrumentText, { color: colors.textPrimary }]}>{calc.instrument}</Text>
-        </View>
+          <Text style={[s.instrumentText, { color: colors.textPrimary, flex: 1 }]}>{calc.instrument}</Text>
+          <Ionicons name="chevron-down" size={18} color={colors.textMuted} />
+        </TouchableOpacity>
 
         {activeTab === 'margin' && (
           <>
@@ -104,7 +129,7 @@ export default function RiskCalculatorScreen({ navigation }) {
           </>
         )}
 
-        {activeTab === 'lotsize' && (
+        {activeTab === 'lotSize' && (
           <>
             <InputRow label={t('riskCalc.riskAmount')} value={calc.riskAmount} onChangeText={calc.setRiskAmount} placeholder="100" colors={colors} />
             <InputRow label={t('riskCalc.stopLossPips')} value={calc.stopLossPips} onChangeText={calc.setStopLossPips} placeholder="20" colors={colors} />
@@ -128,6 +153,55 @@ export default function RiskCalculatorScreen({ navigation }) {
           </>
         )}
       </ScrollView>
+
+      {/* Instrument picker modal */}
+      <Modal visible={pickerOpen} transparent animationType="slide" onRequestClose={() => setPickerOpen(false)}>
+        <View style={s.pickerOverlay}>
+          <View style={[s.pickerSheet, { backgroundColor: colors.bgCard }]}>
+            <View style={s.pickerHeader}>
+              <Text style={[s.pickerTitle, { color: colors.textPrimary }]}>{t('riskCalc.selectInstrument') || 'Select Instrument'}</Text>
+              <TouchableOpacity onPress={() => setPickerOpen(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={24} color={colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+            <View style={[s.pickerSearchBox, { backgroundColor: colors.bgSecondary, borderColor: colors.border }]}>
+              <Ionicons name="search" size={16} color={colors.textMuted} />
+              <TextInput
+                style={[s.pickerSearchInput, { color: colors.textPrimary }]}
+                value={pickerSearch}
+                onChangeText={setPickerSearch}
+                placeholder="Search symbol…"
+                placeholderTextColor={colors.textMuted}
+                autoCapitalize="characters"
+              />
+            </View>
+            <ScrollView style={{ maxHeight: 460 }} showsVerticalScrollIndicator={false}>
+              {filteredGroups.length === 0 ? (
+                <View style={{ padding: 24, alignItems: 'center' }}>
+                  <Text style={{ color: colors.textMuted }}>No matches</Text>
+                </View>
+              ) : filteredGroups.map(group => (
+                <View key={group.group} style={{ marginBottom: 8 }}>
+                  <Text style={[s.pickerGroupHead, { color: colors.textMuted }]}>{group.group}</Text>
+                  {group.symbols.map(sym => (
+                    <TouchableOpacity
+                      key={sym}
+                      style={[s.pickerRow, { borderBottomColor: colors.border }]}
+                      onPress={() => { calc.setInstrument(sym); setPickerOpen(false); }}
+                    >
+                      <Ionicons name="bar-chart-outline" size={16} color={colors.primary} />
+                      <Text style={[s.pickerSymbol, { color: colors.textPrimary, flex: 1 }]}>{sym}</Text>
+                      {calc.instrument === sym && (
+                        <Ionicons name="checkmark" size={18} color={colors.success} />
+                      )}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -147,4 +221,14 @@ const s = StyleSheet.create({
   resultLabel: { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 },
   resultValue: { fontSize: 28, fontWeight: '800' },
   swapResults: { gap: 10, marginTop: 8 },
+  // Instrument picker modal
+  pickerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+  pickerSheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '85%' },
+  pickerHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
+  pickerTitle: { fontSize: 17, fontWeight: '700' },
+  pickerSearchBox: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, borderWidth: 1, marginBottom: 12 },
+  pickerSearchInput: { flex: 1, fontSize: 14, padding: 0 },
+  pickerGroupHead: { fontSize: 11, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase', marginTop: 8, marginBottom: 4 },
+  pickerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  pickerSymbol: { fontSize: 14, fontWeight: '600' },
 });

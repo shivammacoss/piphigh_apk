@@ -9,9 +9,13 @@ function toImpact(raw) {
   return 'low';
 }
 
-function parseEvent(raw) {
+function parseEvent(raw, index) {
+  // Include country + index so two events with the same date+title (e.g. the
+  // same indicator released for different countries, or duplicate rows in the
+  // upstream feed) don't produce colliding React keys.
+  const id = `${raw.date || ''}_${raw.country || ''}_${raw.title || ''}_${index}`;
   return {
-    id: `${raw.date}_${raw.title}`,
+    id,
     title: raw.title || '',
     country: raw.country || '',
     currency: raw.country || '',
@@ -41,7 +45,7 @@ export default function useEconomicCalendar() {
       const res = await fetch(CALENDAR_API);
       const data = await res.json();
       if (mounted.current) {
-        const parsed = (Array.isArray(data) ? data : []).map(parseEvent);
+        const parsed = (Array.isArray(data) ? data : []).map((row, i) => parseEvent(row, i));
         setEvents(parsed);
       }
     } catch (e) {

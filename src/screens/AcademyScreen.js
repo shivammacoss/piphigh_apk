@@ -7,6 +7,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useI18n } from '../i18n';
 import useAcademy from '../hooks/useAcademy';
 import ScreenHeader from '../components/ui/ScreenHeader';
+import { lessonContent } from '../data/lessonContent';
 
 const PHASE_COLORS = ['#2196f3','#2196f3','#2196f3','#14b8a6','#f59e0b','#3b82f6','#a855f7','#eab308'];
 const PHASE_ICONS = ['◆','●','◉','■','◆','▲','◇','★'];
@@ -19,12 +20,173 @@ function ProgressBar({ pct, color, height = 6 }) {
   );
 }
 
+// Renders a single block from lessonContent — covers all the block types the
+// web academy uses (text, keyConcept, definition, practiceTip, comparison,
+// timeline, stats, sessions, hierarchy).
+function LessonBlock({ block, colors }) {
+  if (!block) return null;
+  const t = block.type;
+  if (t === 'text') {
+    return <Text style={[s.lessonText, { color: colors.textPrimary }]}>{block.content}</Text>;
+  }
+  if (t === 'keyConcept') {
+    return (
+      <View style={[s.calloutBox, { backgroundColor: '#1a73e815', borderLeftColor: '#1a73e8' }]}>
+        <Text style={[s.calloutLabel, { color: '#1a73e8' }]}>KEY CONCEPT</Text>
+        <Text style={[s.calloutText, { color: colors.textPrimary }]}>{block.content}</Text>
+      </View>
+    );
+  }
+  if (t === 'definition') {
+    return (
+      <View style={[s.calloutBox, { backgroundColor: '#a855f715', borderLeftColor: '#a855f7' }]}>
+        <Text style={[s.calloutLabel, { color: '#a855f7' }]}>DEFINITION</Text>
+        <Text style={[s.calloutText, { color: colors.textPrimary }]}>{block.content}</Text>
+      </View>
+    );
+  }
+  if (t === 'practiceTip') {
+    return (
+      <View style={[s.calloutBox, { backgroundColor: '#22c55e15', borderLeftColor: '#22c55e' }]}>
+        <Text style={[s.calloutLabel, { color: '#22c55e' }]}>PRACTICE TIP</Text>
+        <Text style={[s.calloutText, { color: colors.textPrimary }]}>{block.content}</Text>
+      </View>
+    );
+  }
+  if (t === 'comparison' && block.comparisonData) {
+    const { left, right } = block.comparisonData;
+    return (
+      <View style={s.compareRow}>
+        <View style={[s.compareCol, { backgroundColor: colors.bgSecondary, borderColor: colors.border }]}>
+          <Text style={[s.compareTitle, { color: colors.textPrimary }]}>{left.title}</Text>
+          {left.items.map((it, i) => (
+            <Text key={i} style={[s.compareItem, { color: colors.textSecondary }]}>• {it}</Text>
+          ))}
+        </View>
+        <View style={[s.compareCol, { backgroundColor: colors.bgSecondary, borderColor: colors.border }]}>
+          <Text style={[s.compareTitle, { color: colors.textPrimary }]}>{right.title}</Text>
+          {right.items.map((it, i) => (
+            <Text key={i} style={[s.compareItem, { color: colors.textSecondary }]}>• {it}</Text>
+          ))}
+        </View>
+      </View>
+    );
+  }
+  if (t === 'timeline' && block.timelineData) {
+    return (
+      <View style={s.specialBlock}>
+        <Text style={[s.specialHead, { color: colors.textMuted }]}>{block.content}</Text>
+        {block.timelineData.map((it, i) => (
+          <View key={i} style={s.timelineRow}>
+            <Text style={s.timelineIcon}>{it.icon}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={[s.timelineYear, { color: colors.primary }]}>{it.year} · {it.label}</Text>
+              <Text style={[s.timelineDesc, { color: colors.textSecondary }]}>{it.desc}</Text>
+            </View>
+          </View>
+        ))}
+      </View>
+    );
+  }
+  if (t === 'stats' && block.statsData) {
+    return (
+      <View style={s.specialBlock}>
+        <Text style={[s.specialHead, { color: colors.textMuted }]}>{block.content}</Text>
+        <View style={s.statsGrid}>
+          {block.statsData.map((it, i) => (
+            <View key={i} style={[s.statBox, { backgroundColor: colors.bgSecondary, borderColor: colors.border }]}>
+              <Text style={s.statIcon}>{it.icon}</Text>
+              <Text style={[s.statBig, { color: colors.textPrimary }]}>{it.value}</Text>
+              <Text style={[s.statLabel, { color: colors.textSecondary }]}>{it.label}</Text>
+              {!!it.sublabel && (
+                <Text style={[s.statSub, { color: colors.textMuted }]}>{it.sublabel}</Text>
+              )}
+            </View>
+          ))}
+        </View>
+      </View>
+    );
+  }
+  if (t === 'sessions' && block.sessionsData) {
+    return (
+      <View style={s.specialBlock}>
+        <Text style={[s.specialHead, { color: colors.textMuted }]}>{block.content}</Text>
+        {block.sessionsData.map((it, i) => (
+          <View key={i} style={[s.sessionRow, { borderBottomColor: colors.border }]}>
+            <Text style={s.sessionFlag}>{it.flag}</Text>
+            <Text style={[s.sessionCity, { color: colors.textPrimary }]}>{it.city}</Text>
+            <Text style={[s.sessionHours, { color: colors.textMuted }]}>{it.hours}</Text>
+          </View>
+        ))}
+      </View>
+    );
+  }
+  if (t === 'hierarchy' && block.hierarchyData) {
+    return (
+      <View style={s.specialBlock}>
+        <Text style={[s.specialHead, { color: colors.textMuted }]}>{block.content}</Text>
+        {block.hierarchyData.map((it, i) => (
+          <View key={i} style={[s.hierarchyRow, { backgroundColor: colors.bgSecondary, borderColor: colors.border }]}>
+            <Text style={s.hierarchyIcon}>{it.icon}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={[s.hierarchyTitle, { color: colors.textPrimary }]}>{it.title}</Text>
+              <Text style={[s.hierarchyDesc, { color: colors.textSecondary }]}>{it.desc}</Text>
+            </View>
+          </View>
+        ))}
+      </View>
+    );
+  }
+  return null;
+}
+
+function LessonContentView({ moduleId, colors }) {
+  const data = moduleId ? lessonContent[moduleId] : null;
+  if (!data) {
+    return (
+      <View style={{ padding: 24, alignItems: 'center' }}>
+        <Ionicons name="book-outline" size={36} color={colors.textMuted} />
+        <Text style={{ color: colors.textMuted, marginTop: 12, textAlign: 'center' }}>
+          Detailed content for this module is coming soon.
+        </Text>
+      </View>
+    );
+  }
+  return (
+    <View>
+      {data.topics?.map((topic) => (
+        <View key={topic.id} style={{ marginBottom: 24 }}>
+          <Text style={[s.topicTitle, { color: colors.textPrimary }]}>{topic.title}</Text>
+          {topic.blocks?.map((b, i) => (
+            <LessonBlock key={i} block={b} colors={colors} />
+          ))}
+        </View>
+      ))}
+      {data.keyTakeaways?.length > 0 && (
+        <View style={[s.takeawaysBox, { backgroundColor: '#1a73e810', borderColor: '#1a73e8' }]}>
+          <Text style={[s.takeawaysHead, { color: '#1a73e8' }]}>KEY TAKEAWAYS</Text>
+          {data.keyTakeaways.map((it, i) => (
+            <Text key={i} style={[s.takeawayItem, { color: colors.textPrimary }]}>✓ {it}</Text>
+          ))}
+        </View>
+      )}
+      {!!data.studyNotes && (
+        <View style={[s.notesBox, { backgroundColor: colors.bgSecondary, borderColor: colors.border }]}>
+          <Text style={[s.notesHead, { color: colors.textMuted }]}>STUDY NOTES</Text>
+          <Text style={[s.notesText, { color: colors.textSecondary }]}>{data.studyNotes}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
 export default function AcademyScreen({ navigation }) {
   const { colors } = useTheme();
   const { t } = useI18n();
   const academy = useAcademy();
   const [quizModal, setQuizModal] = useState(null); // { phaseIndex, questionIndex, answers }
   const [moduleModal, setModuleModal] = useState(null); // phaseIndex
+  const [lessonModal, setLessonModal] = useState(null); // { moduleId, title }
 
   // Quiz logic
   const startQuiz = useCallback((phaseIndex) => {
@@ -147,19 +309,37 @@ export default function AcademyScreen({ navigation }) {
             <ScrollView style={{ maxHeight: 400 }}>
               {currentPhase?.modules.map((mod, i) => {
                 const done = academy.completedModules[mod.id];
+                const hasContent = !!lessonContent[mod.id];
                 return (
                   <TouchableOpacity
                     key={mod.id}
                     style={[s.moduleRow, { borderBottomColor: colors.border }]}
-                    onPress={() => { academy.completeModule(mod.id); }}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      // Open the lesson reader if we have content for this
+                      // module. The completion checkbox below is a separate
+                      // tap target so reading and marking-done don't conflict.
+                      if (hasContent) {
+                        setLessonModal({ moduleId: mod.id, title: mod.title });
+                      } else {
+                        academy.completeModule(mod.id);
+                      }
+                    }}
                   >
-                    <View style={[s.moduleCheck, { borderColor: done ? colors.success : colors.border, backgroundColor: done ? colors.success : 'transparent' }]}>
+                    <TouchableOpacity
+                      style={[s.moduleCheck, { borderColor: done ? colors.success : colors.border, backgroundColor: done ? colors.success : 'transparent' }]}
+                      onPress={(e) => { e.stopPropagation?.(); academy.completeModule(mod.id); }}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    >
                       {done && <Ionicons name="checkmark" size={14} color="#fff" />}
-                    </View>
+                    </TouchableOpacity>
                     <View style={{ flex: 1 }}>
                       <Text style={[s.modTitle, { color: colors.textPrimary }]}>{mod.title}</Text>
-                      <Text style={[s.modMeta, { color: colors.textMuted }]}>{mod.topics} topics · {mod.minutes} min</Text>
+                      <Text style={[s.modMeta, { color: colors.textMuted }]}>
+                        {mod.topics} topics · {mod.minutes} min{hasContent ? '' : ' · Coming soon'}
+                      </Text>
                     </View>
+                    {hasContent && <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />}
                   </TouchableOpacity>
                 );
               })}
@@ -173,6 +353,41 @@ export default function AcademyScreen({ navigation }) {
                   <Text style={{ color: '#fff', fontWeight: '700', fontSize: 14 }}>{t('academy.beginQuiz')}</Text>
                 </TouchableOpacity>
               )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Lesson reader modal */}
+      <Modal visible={!!lessonModal} transparent animationType="slide" onRequestClose={() => setLessonModal(null)}>
+        <View style={s.modalOverlay}>
+          <View style={[s.lessonModal, { backgroundColor: colors.bgCard }]}>
+            <View style={s.modalHeader}>
+              <Text style={[s.modalTitle, { color: colors.textPrimary }]} numberOfLines={2}>
+                {lessonModal?.title}
+              </Text>
+              <TouchableOpacity onPress={() => setLessonModal(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={24} color={colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <LessonContentView moduleId={lessonModal?.moduleId} colors={colors} />
+              {lessonModal && (
+                <TouchableOpacity
+                  style={[s.quizBtn, { backgroundColor: academy.completedModules[lessonModal.moduleId] ? colors.success : colors.primary }]}
+                  onPress={() => { academy.completeModule(lessonModal.moduleId); setLessonModal(null); }}
+                >
+                  <Ionicons
+                    name={academy.completedModules[lessonModal.moduleId] ? 'checkmark-circle' : 'checkmark-circle-outline'}
+                    size={18}
+                    color="#fff"
+                  />
+                  <Text style={{ color: '#fff', fontWeight: '700', fontSize: 14 }}>
+                    {academy.completedModules[lessonModal.moduleId] ? 'Completed' : 'Mark as Complete'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              <View style={{ height: 40 }} />
             </ScrollView>
           </View>
         </View>
@@ -278,4 +493,41 @@ const s = StyleSheet.create({
   optionBtn: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: 12, borderWidth: 1, marginBottom: 10 },
   optCircle: { width: 28, height: 28, borderRadius: 14, borderWidth: 1.5, justifyContent: 'center', alignItems: 'center' },
   optText: { fontSize: 14, fontWeight: '500', flex: 1 },
+  // Lesson reader
+  lessonModal: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '92%' },
+  topicTitle: { fontSize: 16, fontWeight: '700', marginBottom: 12, marginTop: 4 },
+  lessonText: { fontSize: 14, lineHeight: 22, marginBottom: 12 },
+  calloutBox: { padding: 14, borderRadius: 10, borderLeftWidth: 4, marginBottom: 12 },
+  calloutLabel: { fontSize: 10, fontWeight: '800', letterSpacing: 1, marginBottom: 6 },
+  calloutText: { fontSize: 14, lineHeight: 22 },
+  compareRow: { flexDirection: 'row', gap: 10, marginBottom: 12 },
+  compareCol: { flex: 1, padding: 12, borderRadius: 10, borderWidth: 1 },
+  compareTitle: { fontSize: 12, fontWeight: '800', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
+  compareItem: { fontSize: 12, lineHeight: 18, marginBottom: 4 },
+  specialBlock: { marginBottom: 16 },
+  specialHead: { fontSize: 11, fontWeight: '800', letterSpacing: 1, marginBottom: 10 },
+  timelineRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 12 },
+  timelineIcon: { fontSize: 22 },
+  timelineYear: { fontSize: 13, fontWeight: '700', marginBottom: 2 },
+  timelineDesc: { fontSize: 12, lineHeight: 18 },
+  statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  statBox: { width: '48%', padding: 12, borderRadius: 10, borderWidth: 1, alignItems: 'center' },
+  statIcon: { fontSize: 22, marginBottom: 4 },
+  statBig: { fontSize: 18, fontWeight: '800' },
+  statLabel: { fontSize: 12, fontWeight: '600', marginTop: 2 },
+  statSub: { fontSize: 10, marginTop: 2, textAlign: 'center' },
+  sessionRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
+  sessionFlag: { fontSize: 18 },
+  sessionCity: { fontSize: 14, fontWeight: '600', flex: 1 },
+  sessionHours: { fontSize: 12, fontVariant: ['tabular-nums'] },
+  hierarchyRow: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12, borderRadius: 10, borderWidth: 1, marginBottom: 8 },
+  hierarchyIcon: { fontSize: 22 },
+  hierarchyTitle: { fontSize: 14, fontWeight: '700', marginBottom: 2 },
+  hierarchyDesc: { fontSize: 12, lineHeight: 18 },
+  takeawaysBox: { padding: 14, borderRadius: 10, borderWidth: 1, marginTop: 8, marginBottom: 12 },
+  takeawaysHead: { fontSize: 11, fontWeight: '800', letterSpacing: 1, marginBottom: 8 },
+  takeawayItem: { fontSize: 13, lineHeight: 20, marginBottom: 6 },
+  notesBox: { padding: 14, borderRadius: 10, borderWidth: 1, marginBottom: 8 },
+  notesHead: { fontSize: 11, fontWeight: '800', letterSpacing: 1, marginBottom: 8 },
+  notesText: { fontSize: 13, lineHeight: 20 },
 });
