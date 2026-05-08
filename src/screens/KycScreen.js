@@ -236,7 +236,11 @@ export default function KycScreen({ navigation }) {
     );
   }
 
-  const canSubmit = status !== 'review' && status !== 'approved';
+  // Allow re-submission while status is "review" or "rejected" — admins
+  // often ask users to upload additional/replacement documents while a prior
+  // submission is still pending. Only hide the form once verification is
+  // approved.
+  const canSubmit = status !== 'approved';
 
   return (
     <View style={[styles.root, { backgroundColor: colors.bgPrimary, paddingTop: insets.top }]}>

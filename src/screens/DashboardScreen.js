@@ -61,6 +61,10 @@ const DashboardScreen = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [allInstruments, setAllInstruments] = useState([]);
 
+  // KYC banner / popup state
+  const [kycStatus, setKycStatus] = useState('none'); // none | review | rejected | approved
+  const kycPopupShown = useRef(false);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -143,11 +147,45 @@ const DashboardScreen = () => {
     } catch {}
   }, []);
 
+  const fetchKycStatus = useCallback(async () => {
+    try {
+      const res = await authedFetch('/profile');
+      if (!res.ok) return;
+      const data = await res.json().catch(() => ({}));
+      const raw = String(data?.kyc_status || '').toLowerCase();
+      const norm =
+        raw === 'verified' || raw === 'approved' ? 'approved' :
+        raw === 'submitted' || raw === 'under_review' || raw === 'pending' ? 'review' :
+        raw === 'rejected' || raw === 'failed' ? 'rejected' :
+        'none';
+      setKycStatus(norm);
+
+      // One-shot popup per app session if KYC isn't approved.
+      if (norm !== 'approved' && !kycPopupShown.current) {
+        kycPopupShown.current = true;
+        const msg = norm === 'rejected'
+          ? 'Your KYC was rejected. Please re-upload valid documents to continue trading.'
+          : norm === 'review'
+          ? 'Your KYC is under review. You can upload additional documents if requested.'
+          : 'Complete your KYC verification to unlock all features.';
+        Alert.alert(
+          'KYC Verification Required',
+          msg,
+          [
+            { text: 'Later', style: 'cancel' },
+            { text: 'Complete KYC', onPress: () => navigation.navigate('Kyc') },
+          ],
+        );
+      }
+    } catch {}
+  }, [navigation]);
+
   useEffect(() => {
     loadProfile();
     fetchAccounts();
     fetchWallet();
     fetchNotifications();
+    fetchKycStatus();
 
     const i = setInterval(() => {
       fetchAccounts();
@@ -155,11 +193,11 @@ const DashboardScreen = () => {
       fetchNotifications();
     }, 15000);
     return () => clearInterval(i);
-  }, [fetchAccounts, fetchWallet, fetchNotifications, loadProfile]);
+  }, [fetchAccounts, fetchWallet, fetchNotifications, loadProfile, fetchKycStatus]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([fetchAccounts(), fetchWallet(), fetchNotifications()]);
+    await Promise.all([fetchAccounts(), fetchWallet(), fetchNotifications(), fetchKycStatus()]);
     setRefreshing(false);
   };
 
@@ -388,6 +426,48 @@ const DashboardScreen = () => {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
         showsVerticalScrollIndicator={false}
       >
+        {kycStatus !== 'approved' && (
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate('Kyc')}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              padding: 14,
+              borderRadius: 12,
+              marginBottom: 14,
+              backgroundColor: kycStatus === 'rejected' ? '#ef444415' : '#f59e0b15',
+              borderWidth: 1,
+              borderColor: kycStatus === 'rejected' ? '#ef4444' : '#f59e0b',
+            }}
+          >
+            <View style={{
+              width: 40, height: 40, borderRadius: 20, marginRight: 12,
+              alignItems: 'center', justifyContent: 'center',
+              backgroundColor: kycStatus === 'rejected' ? '#ef444425' : '#f59e0b25',
+            }}>
+              <Ionicons
+                name={kycStatus === 'rejected' ? 'close-circle' : kycStatus === 'review' ? 'time' : 'shield-outline'}
+                size={22}
+                color={kycStatus === 'rejected' ? '#ef4444' : '#f59e0b'}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.textPrimary, fontWeight: '700', fontSize: 14 }}>
+                {kycStatus === 'rejected' ? 'KYC Rejected — Re-upload required'
+                  : kycStatus === 'review' ? 'KYC Under Review — Tap to upload more'
+                  : 'Complete Your KYC Verification'}
+              </Text>
+              <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>
+                {kycStatus === 'rejected' ? 'Submit valid documents to continue trading.'
+                  : kycStatus === 'review' ? 'Add additional documents if admin requested.'
+                  : 'Verify your identity to unlock all features.'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+          </TouchableOpacity>
+        )}
+
         {tab === 'accounts' && (
           <View style={[S.panel, { backgroundColor: colors.bgCard, borderColor: colors.border }]}>
             <Text style={[S.panelTitle, { color: colors.textPrimary }]}>Trading Accounts</Text>
